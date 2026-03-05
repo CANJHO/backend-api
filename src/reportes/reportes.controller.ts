@@ -23,6 +23,13 @@ type ResumenRow = {
   marcas_in: number;
   marcas_out: number;
 
+  // ✅ nuevos (separados)
+  tardanzas_jornada_in: number;
+  tardanzas_refrigerio_in: number;
+  minutos_tarde_jornada_in: number;
+  minutos_tarde_refrigerio_in: number;
+
+  // totales
   tardanzas: number;
   minutos_tarde_total: number;
 
@@ -43,6 +50,19 @@ type ResumenRow = {
 @Controller('reportes')
 export class ReportesController {
   constructor(private ds: DataSource) {}
+
+  // ==========================
+  // Filtros globales reportes
+  // ==========================
+  private readonly DNI_EXCLUIDO = '44823948';
+
+  private filtroNoRechazado(aliasAsistencia = 'a') {
+    return `COALESCE(${aliasAsistencia}.estado_validacion,'') <> 'rechazado'`;
+  }
+
+  private filtroNoDniExcluido(aliasUsuario = 'u') {
+    return `COALESCE(${aliasUsuario}.numero_documento,'') <> '${this.DNI_EXCLUIDO}'`;
+  }
 
   // ==========================
   // Helpers fechas / filtros
@@ -174,6 +194,9 @@ export class ReportesController {
     return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
   }
 
+  // ==========================
+  // DATA RESUMEN
+  // ==========================
   private async obtenerResumenData(params: {
     period?: string;
     ref?: string;
@@ -185,9 +208,12 @@ export class ReportesController {
     const { startDate, endDate } = this.resolverRango(params);
     const { usuarioId, sedeId } = params;
 
+    // -------- resumen marcas/tardanzas (excluye rechazados y DNI)
     const resumenParams: any[] = [startDate, endDate];
     const resumenConds: string[] = [
       `a.fecha_hora >= $1::date AND a.fecha_hora < ($2::date + interval '1 day')`,
+      this.filtroNoRechazado('a'),
+      this.filtroNoDniExcluido('u'),
     ];
 
     let p = 3;
@@ -208,10 +234,19 @@ export class ReportesController {
       `SELECT
           u.id AS usuario_id,
           (u.nombre || ' ' || COALESCE(u.apellido_paterno,'') || ' ' || COALESCE(u.apellido_materno,'')) AS usuario,
+
           COUNT(*) FILTER (WHERE a.tipo = 'IN')  AS marcas_in,
           COUNT(*) FILTER (WHERE a.tipo = 'OUT') AS marcas_out,
+
+          COUNT(*) FILTER (WHERE a.minutos_tarde > 0 AND a.evento = 'JORNADA_IN')    AS tardanzas_jornada_in,
+          COUNT(*) FILTER (WHERE a.minutos_tarde > 0 AND a.evento = 'REFRIGERIO_IN') AS tardanzas_refrigerio_in,
+
+          COALESCE(SUM(a.minutos_tarde) FILTER (WHERE a.evento = 'JORNADA_IN'), 0)    AS minutos_tarde_jornada_in,
+          COALESCE(SUM(a.minutos_tarde) FILTER (WHERE a.evento = 'REFRIGERIO_IN'), 0) AS minutos_tarde_refrigerio_in,
+
           COUNT(*) FILTER (WHERE a.minutos_tarde > 0) AS tardanzas,
           COALESCE(SUM(a.minutos_tarde), 0) AS minutos_tarde_total,
+
           MIN(a.fecha_hora) AS primer_ingreso,
           MAX(a.fecha_hora) AS ultima_salida
         FROM asistencias a
@@ -221,8 +256,10 @@ export class ReportesController {
       resumenParams,
     );
 
+    // -------- ausencias (calendario) excluye DNI, y asistencia del día no cuenta rechazados
     const ausParams: any[] = [startDate, endDate];
-    let usuariosFiltro = 'WHERE u.activo = TRUE';
+    let usuariosFiltro =
+      `WHERE u.activo = TRUE AND COALESCE(u.numero_documento,'') <> '${this.DNI_EXCLUIDO}'`;
 
     let aidx = 3;
     if (usuarioId) {
@@ -305,6 +342,7 @@ export class ReportesController {
         JOIN usuarios_filtrados uf ON uf.id = a.usuario_id
        WHERE a.fecha_hora >= $1::date
          AND a.fecha_hora < ($2::date + interval '1 day')
+         AND COALESCE(a.estado_validacion,'') <> 'rechazado'
        GROUP BY a.usuario_id, a.fecha_hora::date
       ),
       cal_final AS (
@@ -380,6 +418,7 @@ export class ReportesController {
       ausParams,
     );
 
+    // -------- merge
     const map = new Map<string, ResumenRow>();
 
     for (const r of resumenRows) {
@@ -389,6 +428,11 @@ export class ReportesController {
 
         marcas_in: Number(r.marcas_in) || 0,
         marcas_out: Number(r.marcas_out) || 0,
+
+        tardanzas_jornada_in: Number(r.tardanzas_jornada_in) || 0,
+        tardanzas_refrigerio_in: Number(r.tardanzas_refrigerio_in) || 0,
+        minutos_tarde_jornada_in: Number(r.minutos_tarde_jornada_in) || 0,
+        minutos_tarde_refrigerio_in: Number(r.minutos_tarde_refrigerio_in) || 0,
 
         tardanzas: Number(r.tardanzas) || 0,
         minutos_tarde_total: Number(r.minutos_tarde_total) || 0,
@@ -415,6 +459,11 @@ export class ReportesController {
 
           marcas_in: 0,
           marcas_out: 0,
+
+          tardanzas_jornada_in: 0,
+          tardanzas_refrigerio_in: 0,
+          minutos_tarde_jornada_in: 0,
+          minutos_tarde_refrigerio_in: 0,
 
           tardanzas: 0,
           minutos_tarde_total: 0,
@@ -493,7 +542,7 @@ export class ReportesController {
   }
 
   // ==========================
-  // Excel (Resumen)
+  // Excel (Resumen) - ✅ con separados
   // ==========================
   @Roles('Gerencia', 'RRHH')
   @Get('resumen-excel')
@@ -522,22 +571,30 @@ export class ReportesController {
       { header: 'Ranking', key: 'ranking', width: 10 },
       { header: 'Usuario', key: 'usuario', width: 34 },
 
-      { header: 'Hora entrada', key: 'marcas_in', width: 12 },
-      { header: 'Hora salida', key: 'marcas_out', width: 12 },
+      { header: 'Marcas IN', key: 'marcas_in', width: 11 },
+      { header: 'Marcas OUT', key: 'marcas_out', width: 12 },
 
-      { header: 'Tardanzas', key: 'tardanzas', width: 12 },
-      { header: 'Minutos tarde', key: 'minutos_tarde_total', width: 14 },
-      { header: 'Hora tarde', key: 'hora_tarde', width: 12 },
+      // ✅ separados
+      { header: 'Tard. Ingreso', key: 'tard_jornada', width: 14 },
+      { header: 'Min. Ingreso', key: 'min_jornada', width: 12 },
+      { header: 'HH:MM Ingreso', key: 'hhmm_jornada', width: 14 },
+
+      { header: 'Tard. Refrig.', key: 'tard_ref', width: 14 },
+      { header: 'Min. Refrig.', key: 'min_ref', width: 12 },
+      { header: 'HH:MM Refrig.', key: 'hhmm_ref', width: 14 },
+
+      // totales
+      { header: 'Tardanzas Total', key: 'tardanzas', width: 14 },
+      { header: 'Minutos Total', key: 'minutos_tarde_total', width: 12 },
+      { header: 'HH:MM Total', key: 'hhmm_total', width: 12 },
 
       { header: 'Días laborables', key: 'dias_laborables', width: 14 },
       { header: 'Días feriados', key: 'dias_feriados', width: 12 },
-
       { header: 'Días con asistencia', key: 'dias_con_asistencia', width: 16 },
       { header: 'Ausencias just.', key: 'ausencias_justificadas', width: 14 },
       { header: 'Ausencias injust.', key: 'ausencias_injustificadas', width: 16 },
 
       { header: 'Horario vigente desde', key: 'horario_vigente_desde', width: 18 },
-
       { header: 'Primer ingreso', key: 'primer_ingreso', width: 22 },
       { header: 'Última salida', key: 'ultima_salida', width: 22 },
     ];
@@ -550,19 +607,25 @@ export class ReportesController {
         marcas_in: r.marcas_in,
         marcas_out: r.marcas_out,
 
+        tard_jornada: r.tardanzas_jornada_in,
+        min_jornada: r.minutos_tarde_jornada_in,
+        hhmm_jornada: this.minutosToHHMM(r.minutos_tarde_jornada_in),
+
+        tard_ref: r.tardanzas_refrigerio_in,
+        min_ref: r.minutos_tarde_refrigerio_in,
+        hhmm_ref: this.minutosToHHMM(r.minutos_tarde_refrigerio_in),
+
         tardanzas: r.tardanzas,
         minutos_tarde_total: r.minutos_tarde_total,
-        hora_tarde: this.minutosToHHMM(r.minutos_tarde_total),
+        hhmm_total: this.minutosToHHMM(r.minutos_tarde_total),
 
         dias_laborables: r.dias_laborables,
         dias_feriados: r.dias_feriados,
-
         dias_con_asistencia: r.dias_con_asistencia,
         ausencias_justificadas: r.ausencias_justificadas,
         ausencias_injustificadas: r.ausencias_injustificadas,
 
         horario_vigente_desde: r.horario_vigente_desde,
-
         primer_ingreso: r.primer_ingreso,
         ultima_salida: r.ultima_salida,
       });
@@ -803,6 +866,8 @@ export class ReportesController {
     const conds: string[] = [
       `a.fecha_hora >= $1::date`,
       `a.fecha_hora <  ($2::date + interval '1 day')`,
+      this.filtroNoRechazado('a'),
+      this.filtroNoDniExcluido('u'),
     ];
 
     let p = 3;
@@ -917,7 +982,6 @@ export class ReportesController {
       throw new BadRequestException('Debe indicar desde y hasta');
     }
 
-    // performance igual que excel
     if (!usuarioId && !sedeId) {
       const d1 = new Date(desde + 'T00:00:00');
       const d2 = new Date(hasta + 'T00:00:00');
@@ -936,6 +1000,8 @@ export class ReportesController {
     const conds: string[] = [
       `a.fecha_hora >= $1::date`,
       `a.fecha_hora <  ($2::date + interval '1 day')`,
+      this.filtroNoRechazado('a'),
+      this.filtroNoDniExcluido('u'),
     ];
 
     let p = 3;
@@ -952,7 +1018,6 @@ export class ReportesController {
 
     const where = conds.join(' AND ');
 
-    // ✅ EXACTO como en la imagen (solo columnas clave)
     const rows = await this.ds.query(
       `
       SELECT
@@ -1007,7 +1072,6 @@ export class ReportesController {
     });
     doc.pipe(res);
 
-    // Logo
     const logoPath = path.join(process.cwd(), 'public', 'logo_negro.png');
     if (fs.existsSync(logoPath)) {
       doc.image(logoPath, doc.page.margins.left, 14, { width: 95 });
@@ -1034,7 +1098,6 @@ export class ReportesController {
 
     doc.moveDown(0.8);
 
-    // ===== Tabla =====
     const col = {
       fecha: 70,
       hora: 46,
@@ -1234,7 +1297,7 @@ export class ReportesController {
   }
 
   // ============================================
-  // Reporte maestro usuarios (SIN TOCAR)
+  // Reporte maestro usuarios (✅ excluye DNI)
   // ============================================
   @Roles('Gerencia', 'RRHH')
   @Get('usuarios-excel')
@@ -1263,6 +1326,7 @@ export class ReportesController {
        LEFT JOIN roles  r ON r.id = u.rol_id
        LEFT JOIN sedes  s ON s.id = u.sede_id
        LEFT JOIN areas  a ON a.id = u.area_id
+      WHERE COALESCE(u.numero_documento,'') <> '${this.DNI_EXCLUIDO}'
       ORDER BY u.created_at DESC`,
     );
 
@@ -1322,7 +1386,7 @@ export class ReportesController {
   }
 
   // ============================================
-  // ✅ Usuarios PDF (tal cual lo enviaste)
+  // ✅ Usuarios PDF (✅ excluye DNI)
   // ============================================
   @Roles('Gerencia', 'RRHH')
   @Get('usuarios-pdf')
@@ -1343,6 +1407,7 @@ export class ReportesController {
       FROM usuarios u
       LEFT JOIN sedes s ON s.id = u.sede_id
       LEFT JOIN areas a ON a.id = u.area_id
+      WHERE COALESCE(u.numero_documento,'') <> '${this.DNI_EXCLUIDO}'
       ORDER BY u.created_at DESC
       `,
     );

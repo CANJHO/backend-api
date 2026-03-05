@@ -258,15 +258,31 @@ export class AsistenciasService {
 
     const estado = 'aprobado';
 
-    // ✅ Tardanza SOLO en JORNADA_IN
+    // ✅ Tardanza en:
+    // - JORNADA_IN: con tolerancia (15 por defecto)
+    // - REFRIGERIO_IN: SIN tolerancia
     let minutos_tarde: number | null = null;
-    if (evento === 'JORNADA_IN' && horario && !esDescanso && !esExcepcionNoLaborable) {
-      const tol = horario.tolerancia_min ?? 15;
-      const minsProg = this.parseTimeToMinutes(horario.hora_inicio);
-      if (minsProg != null) {
-        const minsMarcaje = ahora.getHours() * 60 + ahora.getMinutes();
-        const diff = minsMarcaje - minsProg;
-        minutos_tarde = diff <= tol ? 0 : diff - tol;
+
+    if (horario && !esDescanso && !esExcepcionNoLaborable) {
+      const minsMarcaje = ahora.getHours() * 60 + ahora.getMinutes();
+
+      // 1) Tardanza ingreso jornada (con tolerancia)
+      if (evento === 'JORNADA_IN') {
+        const tol = horario.tolerancia_min ?? 15;
+        const minsProg = this.parseTimeToMinutes(horario.hora_inicio);
+        if (minsProg != null) {
+          const diff = minsMarcaje - minsProg;
+          minutos_tarde = diff <= tol ? 0 : diff - tol;
+        }
+      }
+
+      // 2) Tardanza ingreso refrigerio (SIN tolerancia)
+      if (evento === 'REFRIGERIO_IN') {
+        const minsProg2 = this.parseTimeToMinutes(horario.hora_inicio_2);
+        if (minsProg2 != null) {
+          const diff2 = minsMarcaje - minsProg2;
+          minutos_tarde = diff2 <= 0 ? 0 : diff2; // sin tolerancia
+        }
       }
     }
 
@@ -364,15 +380,31 @@ export class AsistenciasService {
       hayRefrigerio,
     });
 
-    // ✅ Tardanza SOLO en JORNADA_IN
+    // ✅ Tardanza en:
+    // - JORNADA_IN: con tolerancia (15 por defecto)
+    // - REFRIGERIO_IN: SIN tolerancia
     let minutos_tarde: number | null = null;
-    if (evento === 'JORNADA_IN' && horario && !esDescanso && !esExcepcionNoLaborable) {
-      const tol = horario.tolerancia_min ?? 15;
-      const minsProg = this.parseTimeToMinutes(horario.hora_inicio);
-      if (minsProg != null) {
-        const minsMarcaje = ahora.getHours() * 60 + ahora.getMinutes();
-        const diff = minsMarcaje - minsProg;
-        minutos_tarde = diff <= tol ? 0 : diff - tol;
+
+    if (horario && !esDescanso && !esExcepcionNoLaborable) {
+      const minsMarcaje = ahora.getHours() * 60 + ahora.getMinutes();
+
+      // 1) Tardanza ingreso jornada (con tolerancia)
+      if (evento === 'JORNADA_IN') {
+        const tol = horario.tolerancia_min ?? 15;
+        const minsProg = this.parseTimeToMinutes(horario.hora_inicio);
+        if (minsProg != null) {
+          const diff = minsMarcaje - minsProg;
+          minutos_tarde = diff <= tol ? 0 : diff - tol;
+        }
+      }
+
+      // 2) Tardanza ingreso refrigerio (SIN tolerancia)
+      if (evento === 'REFRIGERIO_IN') {
+        const minsProg2 = this.parseTimeToMinutes(horario.hora_inicio_2);
+        if (minsProg2 != null) {
+          const diff2 = minsMarcaje - minsProg2;
+          minutos_tarde = diff2 <= 0 ? 0 : diff2; // sin tolerancia
+        }
       }
     }
 

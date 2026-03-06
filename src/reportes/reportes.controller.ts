@@ -288,15 +288,6 @@ export class ReportesController {
           FROM usuarios_filtrados uf
           CROSS JOIN fechas f
       ),
-      horas AS (
-        SELECT
-          uh.usuario_id,
-          uh.dia_semana,
-          uh.es_descanso,
-          uh.fecha_inicio,
-          COALESCE(uh.fecha_fin, '9999-12-31'::date) AS fecha_fin
-        FROM usuario_horarios uh
-      ),
       horario_vigente AS (
         SELECT
           uh.usuario_id,
@@ -316,18 +307,26 @@ export class ReportesController {
           hv.horario_vigente_desde,
           (hv.horario_vigente_desde IS NOT NULL AND c.fecha >= hv.horario_vigente_desde) AS aplica_por_vigencia,
           CASE
-            WHEN h.usuario_id IS NOT NULL
-              AND h.es_descanso = FALSE
-              THEN TRUE
+            WHEN h.id IS NOT NULL AND h.es_descanso = FALSE THEN TRUE
             ELSE FALSE
           END AS laborable_por_horario
         FROM calendario c
         LEFT JOIN horario_vigente hv
           ON hv.usuario_id = c.usuario_id
-        LEFT JOIN horas h
-          ON h.usuario_id = c.usuario_id
-         AND h.dia_semana = EXTRACT(ISODOW FROM c.fecha)::int
-         AND c.fecha BETWEEN h.fecha_inicio AND h.fecha_fin
+        LEFT JOIN LATERAL (
+          SELECT
+            uh.id,
+            uh.es_descanso,
+            uh.fecha_inicio,
+            uh.creado_en
+          FROM usuario_horarios uh
+          WHERE uh.usuario_id = c.usuario_id
+            AND uh.dia_semana = EXTRACT(ISODOW FROM c.fecha)::int
+            AND uh.fecha_inicio <= c.fecha
+            AND COALESCE(uh.fecha_fin, '9999-12-31'::date) >= c.fecha
+          ORDER BY uh.fecha_inicio DESC, uh.creado_en DESC
+          LIMIT 1
+        ) h ON TRUE
       ),
       exc AS (
         SELECT usuario_id, fecha, es_laborable

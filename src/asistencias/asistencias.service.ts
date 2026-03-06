@@ -2,6 +2,7 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { HorariosService } from '../horarios/horarios.service';
+
 // ==============================
 // Helpers de fecha (America/Lima)
 // ==============================
@@ -59,6 +60,38 @@ export class AsistenciasService {
     return h * 60 + m;
   }
 
+  // ✅ Obtiene partes de fecha/hora exactas en America/Lima
+  private ahoraLimaPartes(d: Date = new Date()) {
+    const partes = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Lima',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).formatToParts(d);
+
+    const get = (type: string) =>
+      Number(partes.find((p) => p.type === type)?.value ?? 0);
+
+    return {
+      year: get('year'),
+      month: get('month'),
+      day: get('day'),
+      hour: get('hour'),
+      minute: get('minute'),
+      second: get('second'),
+    };
+  }
+
+  // ✅ Minutos actuales reales en Lima
+  private ahoraLimaMinutos(d: Date = new Date()) {
+    const p = this.ahoraLimaPartes(d);
+    return p.hour * 60 + p.minute;
+  }
+
   /** ✅ Refrigerio existe SOLO si hay 2 tramos completos */
   private tieneRefrigerio(horario: any | null): boolean {
     return !!(horario?.hora_inicio_2 && horario?.hora_fin_2);
@@ -77,7 +110,9 @@ export class AsistenciasService {
     );
 
     if (!db.length) {
-      throw new BadRequestException('Empleado no encontrado para ese identificador');
+      throw new BadRequestException(
+        'Empleado no encontrado para ese identificador',
+      );
     }
 
     return db[0].id;
@@ -122,7 +157,10 @@ export class AsistenciasService {
     return rows[0] ?? null;
   }
 
-  private async tieneJornadaAbiertaAnterior(usuarioId: string, fechaStr: string): Promise<boolean> {
+  private async tieneJornadaAbiertaAnterior(
+    usuarioId: string,
+    fechaStr: string,
+  ): Promise<boolean> {
     const rows = await this.ds.query(
       `
       WITH last_by_day AS (
@@ -146,9 +184,9 @@ export class AsistenciasService {
     return rows.length > 0;
   }
 
+  // ✅ Ahora sí devuelve minutos de Lima, no del servidor
   private ahoraMinutosLocal(): number {
-    const a = new Date();
-    return a.getHours() * 60 + a.getMinutes();
+    return this.ahoraLimaMinutos();
   }
 
   /**
@@ -215,9 +253,13 @@ export class AsistenciasService {
     const usuarioId = await this.resolverUsuarioId(identificador);
 
     const ahora = new Date();
-    const fechaStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Lima' });
+    const fechaStr = fechaLimaISO(ahora);
+
     // ✅ Si tiene jornada pendiente de día anterior -> RRHH
-    const pendienteAnterior = await this.tieneJornadaAbiertaAnterior(usuarioId, fechaStr);
+    const pendienteAnterior = await this.tieneJornadaAbiertaAnterior(
+      usuarioId,
+      fechaStr,
+    );
     if (pendienteAnterior) {
       throw new BadRequestException(
         'Tiene una jornada pendiente de día anterior. Comuníquese con RRHH.',
@@ -225,24 +267,30 @@ export class AsistenciasService {
     }
 
     // Horario del día
-    const infoHorario = await this.horariosSvc.getHorarioDelDia(usuarioId, fechaStr);
+    const infoHorario = await this.horariosSvc.getHorarioDelDia(
+      usuarioId,
+      fechaStr,
+    );
     const horario = infoHorario?.horario || null;
     const excepcion = infoHorario?.excepcion || null;
 
-    const esExcepcionNoLaborable = excepcion && excepcion.es_laborable === false;
+    const esExcepcionNoLaborable =
+      excepcion && excepcion.es_laborable === false;
     const esDescanso = horario?.es_descanso === true;
 
     // Tú dijiste: gerencia quiere que si hay problemas, RRHH lo registre.
     // Aquí: si es descanso/no laborable, bloqueamos automático y mandamos a RRHH.
     if (esDescanso || esExcepcionNoLaborable) {
-      throw new BadRequestException('Hoy no tiene jornada laborable. Comuníquese con RRHH.');
+      throw new BadRequestException(
+        'Hoy no tiene jornada laborable. Comuníquese con RRHH.',
+      );
     }
 
     const hayRefrigerio = this.tieneRefrigerio(horario);
 
     // Último evento del día
     const last = await this.ultimoEventoDelDia(usuarioId, fechaStr);
-    const ultimoEvento: EventoAsistencia | null = (last?.evento ?? null);
+    const ultimoEvento: EventoAsistencia | null = last?.evento ?? null;
 
     // Decidir siguiente evento
     const evento = this.decidirEventoSiguienteAuto({
@@ -264,7 +312,7 @@ export class AsistenciasService {
     let minutos_tarde: number | null = null;
 
     if (horario && !esDescanso && !esExcepcionNoLaborable) {
-      const minsMarcaje = ahora.getHours() * 60 + ahora.getMinutes();
+      const minsMarcaje = this.ahoraLimaMinutos(ahora);
 
       // 1) Tardanza ingreso jornada (con tolerancia)
       if (evento === 'JORNADA_IN') {
@@ -332,12 +380,16 @@ export class AsistenciasService {
   }
 
   // ───────────────────────────────────────────────
-  // ✅ MARCAJE MANUAL (TU MISMO, lo dejo igual)
+  // ✅ MARCAJE MANUAL
   // ───────────────────────────────────────────────
   async marcar(dto: {
     usuarioId: string;
     tipo: 'IN' | 'OUT';
-    metodo: 'scanner_barras' | 'qr_fijo' | 'qr_dinamico' | 'manual_supervisor';
+    metodo:
+      | 'scanner_barras'
+      | 'qr_fijo'
+      | 'qr_dinamico'
+      | 'manual_supervisor';
     lat?: number;
     lng?: number;
     evidenciaUrl?: string;
@@ -350,30 +402,42 @@ export class AsistenciasService {
     const usuarioId = await this.resolverUsuarioId(dto.usuarioId);
 
     const ahora = new Date();
-    const fechaStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Lima' });
+    const fechaStr = fechaLimaISO(ahora);
 
-    const pendienteAnterior = await this.tieneJornadaAbiertaAnterior(usuarioId, fechaStr);
+    const pendienteAnterior = await this.tieneJornadaAbiertaAnterior(
+      usuarioId,
+      fechaStr,
+    );
     if (pendienteAnterior) {
-      throw new BadRequestException('Tiene una jornada pendiente de día anterior. Comuníquese con RRHH.');
+      throw new BadRequestException(
+        'Tiene una jornada pendiente de día anterior. Comuníquese con RRHH.',
+      );
     }
 
     const geo = await this.validarGeo(usuarioId, dto.lat, dto.lng);
     const estado = 'aprobado';
 
-    const infoHorario = await this.horariosSvc.getHorarioDelDia(usuarioId, fechaStr);
+    const infoHorario = await this.horariosSvc.getHorarioDelDia(
+      usuarioId,
+      fechaStr,
+    );
     const horario = infoHorario?.horario || null;
     const excepcion = infoHorario?.excepcion || null;
 
-    const esExcepcionNoLaborable = excepcion && excepcion.es_laborable === false;
+    const esExcepcionNoLaborable =
+      excepcion && excepcion.es_laborable === false;
     const esDescanso = horario?.es_descanso === true;
 
-    const hayRefrigerio = this.tieneRefrigerio(horario) && !esDescanso && !esExcepcionNoLaborable;
+    const hayRefrigerio =
+      this.tieneRefrigerio(horario) &&
+      !esDescanso &&
+      !esExcepcionNoLaborable;
 
     // Último evento del día
     const last = await this.ultimoEventoDelDia(usuarioId, fechaStr);
-    const ultimoEvento: EventoAsistencia | null = (last?.evento ?? null);
+    const ultimoEvento: EventoAsistencia | null = last?.evento ?? null;
 
-    // ✅ Tu lógica manual basada en tipo (la dejo tal cual, por si la necesitas)
+    // ✅ Tu lógica manual basada en tipo
     const evento = this.decidirEventoSiguiente({
       tipo: dto.tipo,
       ultimoEvento,
@@ -386,7 +450,7 @@ export class AsistenciasService {
     let minutos_tarde: number | null = null;
 
     if (horario && !esDescanso && !esExcepcionNoLaborable) {
-      const minsMarcaje = ahora.getHours() * 60 + ahora.getMinutes();
+      const minsMarcaje = this.ahoraLimaMinutos(ahora);
 
       // 1) Tardanza ingreso jornada (con tolerancia)
       if (evento === 'JORNADA_IN') {
@@ -408,7 +472,10 @@ export class AsistenciasService {
       }
     }
 
-    const gps = dto.lat != null && dto.lng != null ? { lat: dto.lat, lng: dto.lng } : null;
+    const gps =
+      dto.lat != null && dto.lng != null
+        ? { lat: dto.lat, lng: dto.lng }
+        : null;
 
     await this.ds.query(
       `INSERT INTO asistencias(
@@ -453,7 +520,7 @@ export class AsistenciasService {
     };
   }
 
-  /** ✅ TU FUNCIÓN manual decidirEventoSiguiente (la dejo intacta) */
+  /** ✅ TU FUNCIÓN manual decidirEventoSiguiente */
   private decidirEventoSiguiente(params: {
     tipo: 'IN' | 'OUT';
     ultimoEvento: EventoAsistencia | null;
@@ -462,38 +529,60 @@ export class AsistenciasService {
     const { tipo, ultimoEvento, hayRefrigerio } = params;
 
     if (!ultimoEvento) {
-      if (tipo !== 'IN') throw new BadRequestException('Falta marcaje previo. Comuníquese con RRHH.');
+      if (tipo !== 'IN')
+        throw new BadRequestException(
+          'Falta marcaje previo. Comuníquese con RRHH.',
+        );
       return 'JORNADA_IN';
     }
 
     if (!hayRefrigerio) {
       if (ultimoEvento === 'JORNADA_IN') {
-        if (tipo !== 'OUT') throw new BadRequestException('Ya tiene ENTRADA registrada. Para salir, use SALIDA.');
+        if (tipo !== 'OUT')
+          throw new BadRequestException(
+            'Ya tiene ENTRADA registrada. Para salir, use SALIDA.',
+          );
         return 'JORNADA_OUT';
       }
-      throw new BadRequestException('Usted ya cerró su jornada hoy. Si hay un error, comuníquese con RRHH.');
+      throw new BadRequestException(
+        'Usted ya cerró su jornada hoy. Si hay un error, comuníquese con RRHH.',
+      );
     }
 
     switch (ultimoEvento) {
       case 'JORNADA_IN':
-        if (tipo !== 'OUT') throw new BadRequestException('Ya tiene ENTRADA registrada. Para refrigerio use SALIDA.');
+        if (tipo !== 'OUT')
+          throw new BadRequestException(
+            'Ya tiene ENTRADA registrada. Para refrigerio use SALIDA.',
+          );
         return 'REFRIGERIO_OUT';
 
       case 'REFRIGERIO_OUT':
-        if (tipo !== 'IN') throw new BadRequestException('Usted ya salió a refrigerio. Para volver, use ENTRADA.');
+        if (tipo !== 'IN')
+          throw new BadRequestException(
+            'Usted ya salió a refrigerio. Para volver, use ENTRADA.',
+          );
         return 'REFRIGERIO_IN';
 
       case 'REFRIGERIO_IN':
-        if (tipo !== 'OUT') throw new BadRequestException('Usted ya retornó de refrigerio. Para salir, use SALIDA.');
+        if (tipo !== 'OUT')
+          throw new BadRequestException(
+            'Usted ya retornó de refrigerio. Para salir, use SALIDA.',
+          );
         return 'JORNADA_OUT';
 
       case 'JORNADA_OUT':
       default:
-        throw new BadRequestException('Usted ya cerró su jornada hoy. Si hay un error, comuníquese con RRHH.');
+        throw new BadRequestException(
+          'Usted ya cerró su jornada hoy. Si hay un error, comuníquese con RRHH.',
+        );
     }
   }
 
-  async marcarDesdeKiosko(dto: { identificador: string; tipo: 'IN' | 'OUT' }) {
+  async marcarDesdeKiosko(dto: {
+    identificador: string;
+    tipo: 'IN' | 'OUT';
+  }) {
     return this.marcar({
       usuarioId: dto.identificador,
       tipo: dto.tipo,

@@ -92,124 +92,139 @@ export class HorariosService {
 
 // ───────────────────────────────────────────────
 // 4. NUEVA SEMANA (CREA 7 DIAS DE HORARIO)
-// ───────────────────────────────────────────────
-  async setSemana(usuarioId: string, dto: any) {
-    const fi = dto.fecha_inicio || fechaLimaISO();
-    const items = dto.items || [];
+    // ───────────────────────────────────────────────
+    async setSemana(usuarioId: string, dto: any) {
+      const fi = dto.fecha_inicio || fechaLimaISO();
+      const items = dto.items || [];
 
-    if (items.length !== 7) {
-      throw new BadRequestException('Debes enviar 7 días de horario.');
-    }
-
-    let diasLaborables = 0;
-
-    // Validación defensiva en backend
-    for (const it of items) {
-      const {
-        dia,
-        hora_inicio,
-        hora_fin,
-        hora_inicio_2,
-        hora_fin_2,
-        es_descanso,
-      } = it;
-
-      if (dia == null) {
-        throw new BadRequestException('Cada item debe indicar el día (1..7).');
+      if (items.length !== 7) {
+        throw new BadRequestException('Debes enviar 7 días de horario.');
       }
 
-      if (!es_descanso) {
-        diasLaborables++;
+      let diasLaborables = 0;
 
-        const t1i = hora_inicio;
-        const t1f = hora_fin;
-        const t2i = hora_inicio_2;
-        const t2f = hora_fin_2;
-
-        // Turno 1: si se usa, debe estar completo
-        if ((t1i && !t1f) || (!t1i && t1f)) {
-          throw new BadRequestException(
-            `En el día ${dia}, si defines el Turno 1 debes indicar hora de inicio y fin.`,
-          );
-        }
-
-        // Turno 2: si se usa, debe estar completo
-        if ((t2i && !t2f) || (!t2i && t2f)) {
-          throw new BadRequestException(
-            `En el día ${dia}, si defines el Turno 2 debes indicar hora de inicio y fin.`,
-          );
-        }
-
-        // Orden lógico de turnos usados
-        if (t1i && t1f && t1i >= t1f) {
-          throw new BadRequestException(
-            `En el día ${dia}, la hora de inicio del Turno 1 debe ser menor que la hora de fin.`,
-          );
-        }
-        if (t2i && t2f && t2i >= t2f) {
-          throw new BadRequestException(
-            `En el día ${dia}, la hora de inicio del Turno 2 debe ser menor que la hora de fin.`,
-          );
-        }
-
-        // Al menos un tramo en días laborables
-        if (!t1i && !t1f && !t2i && !t2f) {
-          throw new BadRequestException(
-            `En el día ${dia}, configura al menos un turno o márcalo como descanso.`,
-          );
-        }
-      }
-    }
-
-    // No permitir semanas 100% descanso
-    if (diasLaborables === 0) {
-      throw new BadRequestException(
-        'El horario no puede ser solo descansos. Configura al menos un día laborable.',
-      );
-    }
-
-    // Cerrar vigencias anteriores (la que esté abierta)
-    await this.ds.query(
-      `UPDATE usuario_horarios
-          SET fecha_fin = $2
-        WHERE usuario_id = $1 AND fecha_fin IS NULL`,
-      [usuarioId, fi],
-    );
-
-    // Insertar la nueva semana
-    for (const it of items) {
-      const {
-        dia,
-        hora_inicio,
-        hora_fin,
-        hora_inicio_2,
-        hora_fin_2,
-        es_descanso,
-        tolerancia_min,
-      } = it;
-
-      await this.ds.query(
-        `INSERT INTO usuario_horarios
-          (usuario_id, dia_semana, hora_inicio, hora_fin,
-          hora_inicio_2, hora_fin_2,
-          es_descanso, tolerancia_min, fecha_inicio)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-        [
-          usuarioId,
+      for (const it of items) {
+        const {
           dia,
-          es_descanso ? null : hora_inicio,
-          es_descanso ? null : hora_fin,
-          es_descanso ? null : (hora_inicio_2 || null),
-          es_descanso ? null : (hora_fin_2 || null),
-          !!es_descanso,
-          tolerancia_min || 15,
-          fi,
-        ],
-      );
-    }
+          hora_inicio,
+          hora_fin,
+          hora_inicio_2,
+          hora_fin_2,
+          es_descanso,
+        } = it;
 
-    return { ok: true };
-  }
+        if (dia == null) {
+          throw new BadRequestException('Cada item debe indicar el día (1..7).');
+        }
+
+        if (!es_descanso) {
+          diasLaborables++;
+
+          const t1i = hora_inicio;
+          const t1f = hora_fin;
+          const t2i = hora_inicio_2;
+          const t2f = hora_fin_2;
+
+          if ((t1i && !t1f) || (!t1i && t1f)) {
+            throw new BadRequestException(
+              `En el día ${dia}, si defines el Turno 1 debes indicar hora de inicio y fin.`,
+            );
+          }
+
+          if ((t2i && !t2f) || (!t2i && t2f)) {
+            throw new BadRequestException(
+              `En el día ${dia}, si defines el Turno 2 debes indicar hora de inicio y fin.`,
+            );
+          }
+
+          if (t1i && t1f && t1i >= t1f) {
+            throw new BadRequestException(
+              `En el día ${dia}, la hora de inicio del Turno 1 debe ser menor que la hora de fin.`,
+            );
+          }
+
+          if (t2i && t2f && t2i >= t2f) {
+            throw new BadRequestException(
+              `En el día ${dia}, la hora de inicio del Turno 2 debe ser menor que la hora de fin.`,
+            );
+          }
+
+          if (!t1i && !t1f && !t2i && !t2f) {
+            throw new BadRequestException(
+              `En el día ${dia}, configura al menos un turno o márcalo como descanso.`,
+            );
+          }
+        }
+      }
+
+      if (diasLaborables === 0) {
+        throw new BadRequestException(
+          'El horario no puede ser solo descansos. Configura al menos un día laborable.',
+        );
+      }
+
+      // 🔎 Verificar si ya existe un bloque con esa misma fecha_inicio
+      const existeMismaFecha = await this.ds.query(
+        `SELECT id
+          FROM usuario_horarios
+          WHERE usuario_id = $1
+            AND fecha_inicio = $2::date`,
+        [usuarioId, fi],
+      );
+
+      if (existeMismaFecha.length > 0) {
+        // 🧹 Si existe, eliminar ese bloque completo
+        await this.ds.query(
+          `DELETE FROM usuario_horarios
+            WHERE usuario_id = $1
+              AND fecha_inicio = $2::date`,
+          [usuarioId, fi],
+        );
+      } else {
+        // 🔒 Si es una nueva vigencia, cerrar la anterior correctamente
+        await this.ds.query(
+          `UPDATE usuario_horarios
+              SET fecha_fin = ($2::date - INTERVAL '1 day')::date
+            WHERE usuario_id = $1
+              AND fecha_fin IS NULL`,
+          [usuarioId, fi],
+        );
+      }
+
+      // ➜ Insertar nueva semana limpia
+      for (const it of items) {
+        const {
+          dia,
+          hora_inicio,
+          hora_fin,
+          hora_inicio_2,
+          hora_fin_2,
+          es_descanso,
+          tolerancia_min,
+        } = it;
+
+        await this.ds.query(
+          `INSERT INTO usuario_horarios
+            (usuario_id, dia_semana, hora_inicio, hora_fin,
+            hora_inicio_2, hora_fin_2,
+            es_descanso, tolerancia_min, fecha_inicio)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+          [
+            usuarioId,
+            dia,
+            es_descanso ? null : hora_inicio,
+            es_descanso ? null : hora_fin,
+            es_descanso ? null : (hora_inicio_2 || null),
+            es_descanso ? null : (hora_fin_2 || null),
+            !!es_descanso,
+            tolerancia_min || 15,
+            fi,
+          ],
+        );
+      }
+
+      return { ok: true };
+    }
 
 
 

@@ -47,6 +47,32 @@ type ResumenRow = {
   ranking?: number;
 };
 
+type DetalleAnaliticoRow = {
+  fecha: string;
+  hora: string;
+  empleado: string;
+  dni: string;
+  sede: string;
+  area: string;
+  tipo: string;
+  evento: string;
+  minutos_tarde: number;
+  metodo: string;
+  estado_validacion: string;
+
+  min_tarde_jornada_in: number;
+  min_tarde_refrigerio_in: number;
+  minutos_tarde_total: number;
+  horas_tarde_total: number;
+
+  tardanzas_jornada_in: number;
+  tardanzas_refrigerio_in: number;
+  tardanzas_dia: number;
+
+  minutos_acumulados: number;
+  horas_acumuladas: number;
+};
+
 type FiltrosQuery = {
   period?: string;
   ref?: string;
@@ -294,6 +320,69 @@ export class ReportesController {
     ws.views = [{ state: "frozen", ySplit: 1 }];
   }
 
+  private applyExcelHeaderStyleDark(ws: ExcelJS.Worksheet) {
+    const header = ws.getRow(1);
+    header.height = 22;
+
+    header.eachCell((cell) => {
+      cell.font = {
+        bold: true,
+        color: { argb: "FFFFFFFF" },
+      };
+      cell.alignment = {
+        vertical: "middle",
+        horizontal: "center",
+        wrapText: true,
+      };
+      cell.fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "1F4E78" },
+      };
+      cell.border = {
+        top: { style: "thin", color: { argb: "D9D9D9" } },
+        left: { style: "thin", color: { argb: "D9D9D9" } },
+        bottom: { style: "thin", color: { argb: "D9D9D9" } },
+        right: { style: "thin", color: { argb: "D9D9D9" } },
+      };
+    });
+
+    ws.views = [{ state: "frozen", ySplit: 1 }];
+    ws.autoFilter = {
+      from: { row: 1, column: 1 },
+      to: { row: 1, column: ws.columnCount },
+    };
+  }
+
+  private applyExcelBodyStyle(ws: ExcelJS.Worksheet) {
+    for (let i = 2; i <= ws.rowCount; i++) {
+      const row = ws.getRow(i);
+
+      row.eachCell((cell) => {
+        cell.alignment = {
+          vertical: "middle",
+          horizontal: "center",
+        };
+        cell.border = {
+          top: { style: "thin", color: { argb: "EDEDED" } },
+          left: { style: "thin", color: { argb: "EDEDED" } },
+          bottom: { style: "thin", color: { argb: "EDEDED" } },
+          right: { style: "thin", color: { argb: "EDEDED" } },
+        };
+      });
+
+      if (i % 2 === 0) {
+        row.eachCell((cell) => {
+          cell.fill = {
+            type: "pattern",
+            pattern: "solid",
+            fgColor: { argb: "F8FAFC" },
+          };
+        });
+      }
+    }
+  }
+
   private async sendExcel(
     res: Response,
     wb: ExcelJS.Workbook,
@@ -373,6 +462,184 @@ export class ReportesController {
     }
 
     return { usuarioLabel, sedeLabel };
+  }
+
+  private async obtenerDetalleAnaliticoRows(params: {
+    desde: string;
+    hasta: string;
+    usuarioId?: string;
+    sedeId?: string;
+  }): Promise<DetalleAnaliticoRow[]> {
+    const { desde, hasta, usuarioId, sedeId } = params;
+
+    const build = this.buildWhereAsistencias({
+      desde,
+      hasta,
+      usuarioId,
+      sedeId,
+      aliasAsistencia: "a",
+      aliasUsuario: "u",
+      usarAliasUsuarioEnUuid: true,
+    });
+
+    const rows = await this.ds.query(
+      `
+      WITH base AS (
+        SELECT
+          a.usuario_id,
+          a.fecha_hora::date AS fecha,
+          a.fecha_hora,
+          TO_CHAR(a.fecha_hora, 'HH24:MI') AS hora,
+
+          TRIM(
+            COALESCE(u.nombre,'') || ' ' ||
+            COALESCE(u.apellido_paterno,'') || ' ' ||
+            COALESCE(u.apellido_materno,'')
+          ) AS empleado,
+
+          COALESCE(u.numero_documento, '') AS dni,
+          COALESCE(s.nombre, '') AS sede,
+          COALESCE(ar.nombre, '') AS area,
+
+          CASE a.tipo
+            WHEN 'IN'  THEN 'ENTRADA'
+            WHEN 'OUT' THEN 'SALIDA'
+            ELSE COALESCE(a.tipo, '')
+          END AS tipo,
+
+          COALESCE(a.evento, '') AS evento_codigo,
+
+          CASE a.evento
+            WHEN 'JORNADA_IN'     THEN 'Inicio de jornada'
+            WHEN 'JORNADA_OUT'    THEN 'Fin de jornada'
+            WHEN 'REFRIGERIO_IN'  THEN 'Entrada de refrigerio'
+            WHEN 'REFRIGERIO_OUT' THEN 'Salida a refrigerio'
+            WHEN 'ALMUERZO_IN'    THEN 'Entrada de almuerzo'
+            WHEN 'ALMUERZO_OUT'   THEN 'Salida a almuerzo'
+            WHEN 'BREAK_IN'       THEN 'Entrada de break'
+            WHEN 'BREAK_OUT'      THEN 'Salida a break'
+            ELSE COALESCE(a.evento, '')
+          END AS evento,
+
+          COALESCE(a.minutos_tarde, 0) AS minutos_tarde,
+          COALESCE(a.metodo, '') AS metodo,
+          COALESCE(a.estado_validacion, '') AS estado_validacion,
+
+          h.hora_salida_programada
+        FROM asistencias a
+        JOIN usuarios u ON u.id = a.usuario_id
+        LEFT JOIN sedes s ON s.id = u.sede_id
+        LEFT JOIN areas ar ON ar.id = u.area_id
+        LEFT JOIN LATERAL (
+          SELECT
+            CASE
+              WHEN uh.hora_fin_2 IS NOT NULL THEN uh.hora_fin_2
+              ELSE uh.hora_fin
+            END AS hora_salida_programada
+          FROM usuario_horarios uh
+          WHERE uh.usuario_id = a.usuario_id
+            AND uh.dia_semana = EXTRACT(ISODOW FROM a.fecha_hora)::int
+            AND uh.es_descanso = FALSE
+            AND uh.fecha_inicio <= a.fecha_hora::date
+            AND COALESCE(uh.fecha_fin, '9999-12-31'::date) >= a.fecha_hora::date
+          ORDER BY uh.fecha_inicio DESC, uh.creado_en DESC
+          LIMIT 1
+        ) h ON TRUE
+        WHERE ${build.where}
+      ),
+      diario AS (
+        SELECT
+          b.usuario_id,
+          b.fecha,
+
+          COALESCE(SUM(b.minutos_tarde) FILTER (WHERE b.evento_codigo = 'JORNADA_IN'), 0) AS min_tarde_jornada_in,
+          COALESCE(SUM(b.minutos_tarde) FILTER (WHERE b.evento_codigo = 'REFRIGERIO_IN'), 0) AS min_tarde_refrigerio_in,
+          COALESCE(SUM(b.minutos_tarde), 0) AS minutos_tarde_total,
+
+          COUNT(*) FILTER (WHERE b.minutos_tarde > 0 AND b.evento_codigo = 'JORNADA_IN') AS tardanzas_jornada_in,
+          COUNT(*) FILTER (WHERE b.minutos_tarde > 0 AND b.evento_codigo = 'REFRIGERIO_IN') AS tardanzas_refrigerio_in,
+          COUNT(*) FILTER (WHERE b.minutos_tarde > 0) AS tardanzas_dia,
+
+          COALESCE(SUM(
+            CASE
+              WHEN b.evento_codigo = 'JORNADA_OUT'
+               AND b.hora_salida_programada IS NOT NULL
+              THEN GREATEST(
+                (
+                  EXTRACT(HOUR FROM b.fecha_hora)::int * 60
+                  + EXTRACT(MINUTE FROM b.fecha_hora)::int
+                )
+                -
+                (
+                  EXTRACT(HOUR FROM b.hora_salida_programada)::int * 60
+                  + EXTRACT(MINUTE FROM b.hora_salida_programada)::int
+                ),
+                0
+              )
+              ELSE 0
+            END
+          ), 0) AS minutos_acumulados
+        FROM base b
+        GROUP BY b.usuario_id, b.fecha
+      )
+      SELECT
+        TO_CHAR(b.fecha, 'DD/MM/YYYY') AS fecha,
+        b.hora,
+        b.empleado,
+        b.dni,
+        b.sede,
+        b.area,
+        b.tipo,
+        b.evento,
+        b.minutos_tarde,
+        b.metodo,
+        b.estado_validacion,
+
+        COALESCE(d.min_tarde_jornada_in, 0) AS min_tarde_jornada_in,
+        COALESCE(d.min_tarde_refrigerio_in, 0) AS min_tarde_refrigerio_in,
+        COALESCE(d.minutos_tarde_total, 0) AS minutos_tarde_total,
+        ROUND(COALESCE(d.minutos_tarde_total, 0)::numeric / 60.0, 2) AS horas_tarde_total,
+
+        COALESCE(d.tardanzas_jornada_in, 0) AS tardanzas_jornada_in,
+        COALESCE(d.tardanzas_refrigerio_in, 0) AS tardanzas_refrigerio_in,
+        COALESCE(d.tardanzas_dia, 0) AS tardanzas_dia,
+
+        COALESCE(d.minutos_acumulados, 0) AS minutos_acumulados,
+        ROUND(COALESCE(d.minutos_acumulados, 0)::numeric / 60.0, 2) AS horas_acumuladas
+      FROM base b
+      JOIN diario d
+        ON d.usuario_id = b.usuario_id
+       AND d.fecha = b.fecha
+      ORDER BY b.empleado, b.fecha, b.hora, b.fecha_hora
+      `,
+      build.params,
+    );
+
+    return rows.map((r: any) => ({
+      fecha: r.fecha,
+      hora: r.hora,
+      empleado: r.empleado,
+      dni: r.dni,
+      sede: r.sede,
+      area: r.area,
+      tipo: r.tipo,
+      evento: r.evento,
+      minutos_tarde: Number(r.minutos_tarde) || 0,
+      metodo: r.metodo || "",
+      estado_validacion: r.estado_validacion || "",
+
+      min_tarde_jornada_in: Number(r.min_tarde_jornada_in) || 0,
+      min_tarde_refrigerio_in: Number(r.min_tarde_refrigerio_in) || 0,
+      minutos_tarde_total: Number(r.minutos_tarde_total) || 0,
+      horas_tarde_total: Number(r.horas_tarde_total) || 0,
+
+      tardanzas_jornada_in: Number(r.tardanzas_jornada_in) || 0,
+      tardanzas_refrigerio_in: Number(r.tardanzas_refrigerio_in) || 0,
+      tardanzas_dia: Number(r.tardanzas_dia) || 0,
+
+      minutos_acumulados: Number(r.minutos_acumulados) || 0,
+      horas_acumuladas: Number(r.horas_acumuladas) || 0,
+    }));
   }
 
   // ==========================
@@ -1255,81 +1522,115 @@ export class ReportesController {
     this.validarRangoDetalle(desde, hasta);
     this.validarRangoMaximoSinFiltros(desde, hasta, usuarioId, sedeId);
 
-    const build = this.buildWhereAsistencias({
+    const rows = await this.obtenerDetalleAnaliticoRows({
       desde: desde!,
       hasta: hasta!,
       usuarioId,
       sedeId,
-      aliasAsistencia: "a",
-      aliasUsuario: "u",
-      usarAliasUsuarioEnUuid: true,
     });
 
-    const rows = await this.ds.query(
-      `
-      SELECT
-        a.fecha_hora::date               AS fecha,
-        TO_CHAR(a.fecha_hora, 'HH24:MI') AS hora,
-
-        CASE a.tipo
-          WHEN 'IN'  THEN 'ENTRADA'
-          WHEN 'OUT' THEN 'SALIDA'
-          ELSE COALESCE(a.tipo, '')
-        END AS tipo,
-
-        CASE a.evento
-          WHEN 'JORNADA_IN'     THEN 'Inicio de jornada'
-          WHEN 'JORNADA_OUT'    THEN 'Fin de jornada'
-          WHEN 'REFRIGERIO_IN'  THEN 'Entrada de refrigerio'
-          WHEN 'REFRIGERIO_OUT' THEN 'Salida a refrigerio'
-          WHEN 'ALMUERZO_IN'    THEN 'Entrada de almuerzo'
-          WHEN 'ALMUERZO_OUT'   THEN 'Salida a almuerzo'
-          WHEN 'BREAK_IN'       THEN 'Entrada de break'
-          WHEN 'BREAK_OUT'      THEN 'Salida a break'
-          ELSE COALESCE(a.evento, '')
-        END AS evento,
-
-        COALESCE(a.minutos_tarde, 0)      AS minutos_tarde,
-        COALESCE(a.metodo, '')            AS metodo,
-        COALESCE(a.estado_validacion, '') AS estado_validacion,
-
-        (u.nombre || ' ' ||
-         COALESCE(u.apellido_paterno,'') || ' ' ||
-         COALESCE(u.apellido_materno,'')) AS empleado,
-        u.numero_documento AS dni,
-
-        COALESCE(s.nombre,'')  AS sede,
-        COALESCE(ar.nombre,'') AS area
-      FROM asistencias a
-      JOIN usuarios u ON u.id = a.usuario_id
-      LEFT JOIN sedes s ON s.id = u.sede_id
-      LEFT JOIN areas ar ON ar.id = u.area_id
-      WHERE ${build.where}
-      ORDER BY empleado, fecha, hora
-      `,
-      build.params,
-    );
-
     const wb = new ExcelJS.Workbook();
-    const ws = wb.addWorksheet("Detalle Asistencias");
+    const ws = wb.addWorksheet("Detalle");
 
     ws.columns = [
       { header: "Fecha", key: "fecha", width: 12 },
-      { header: "Hora", key: "hora", width: 10 },
-      { header: "Empleado", key: "empleado", width: 30 },
+      { header: "Hora", key: "hora", width: 9 },
+      { header: "Empleado", key: "empleado", width: 32 },
+      { header: "Área", key: "area", width: 24 },
       { header: "DNI", key: "dni", width: 14 },
       { header: "Sede", key: "sede", width: 18 },
-      { header: "Área", key: "area", width: 18 },
-      { header: "Tipo", key: "tipo", width: 10 },
       { header: "Evento", key: "evento", width: 22 },
-      { header: "Min. tarde", key: "minutos_tarde", width: 12 },
-      { header: "Método", key: "metodo", width: 16 },
+      { header: "Tipo", key: "tipo", width: 10 },
+
+      { header: "Min. tarde marca", key: "minutos_tarde", width: 14 },
+      { header: "Min. tard. ingreso", key: "min_tarde_jornada_in", width: 16 },
+      {
+        header: "Min. tard. refrigerio",
+        key: "min_tarde_refrigerio_in",
+        width: 18,
+      },
+      { header: "Min. tarde total", key: "minutos_tarde_total", width: 15 },
+      { header: "Horas tarde total", key: "horas_tarde_total", width: 15 },
+
+      { header: "Tard. ingreso", key: "tardanzas_jornada_in", width: 13 },
+      { header: "Tard. refrigerio", key: "tardanzas_refrigerio_in", width: 15 },
+      { header: "Tardanzas día", key: "tardanzas_dia", width: 13 },
+
+      { header: "Min. acumulados", key: "minutos_acumulados", width: 15 },
+      { header: "Horas acumuladas", key: "horas_acumuladas", width: 15 },
+
       { header: "Estado", key: "estado_validacion", width: 14 },
+      { header: "Método", key: "metodo", width: 16 },
     ];
 
-    rows.forEach((r: any) => ws.addRow(r));
+    rows.forEach((r) => {
+      ws.addRow(r);
+    });
 
-    this.applyExcelHeaderStyle(ws);
+    this.applyExcelHeaderStyleDark(ws);
+    this.applyExcelBodyStyle(ws);
+
+    ws.getColumn("empleado").alignment = {
+      horizontal: "left",
+      vertical: "middle",
+    };
+    ws.getColumn("area").alignment = {
+      horizontal: "left",
+      vertical: "middle",
+    };
+    ws.getColumn("evento").alignment = {
+      horizontal: "left",
+      vertical: "middle",
+    };
+    ws.getColumn("sede").alignment = {
+      horizontal: "center",
+      vertical: "middle",
+    };
+    ws.getColumn("estado_validacion").alignment = {
+      horizontal: "center",
+      vertical: "middle",
+    };
+    ws.getColumn("metodo").alignment = {
+      horizontal: "center",
+      vertical: "middle",
+    };
+
+    ws.getColumn("horas_tarde_total").numFmt = "0.00";
+    ws.getColumn("horas_acumuladas").numFmt = "0.00";
+
+    for (let i = 2; i <= ws.rowCount; i++) {
+      const row = ws.getRow(i);
+
+      const minMarca = Number(row.getCell("minutos_tarde").value || 0);
+      const tardDia = Number(row.getCell("tardanzas_dia").value || 0);
+      const minAcum = Number(row.getCell("minutos_acumulados").value || 0);
+
+      if (minMarca > 0) {
+        row.getCell("minutos_tarde").font = {
+          color: { argb: "C00000" },
+          bold: true,
+        };
+      }
+
+      if (tardDia > 0) {
+        row.getCell("tardanzas_dia").font = {
+          color: { argb: "C00000" },
+          bold: true,
+        };
+      }
+
+      if (minAcum > 0) {
+        row.getCell("minutos_acumulados").font = {
+          color: { argb: "1F4E78" },
+          bold: true,
+        };
+        row.getCell("horas_acumuladas").font = {
+          color: { argb: "1F4E78" },
+          bold: true,
+        };
+      }
+    }
+
     await this.sendExcel(res, wb, "reporte_asistencias_detalle.xlsx");
   }
 
@@ -1348,61 +1649,12 @@ export class ReportesController {
     this.validarRangoDetalle(desde, hasta);
     this.validarRangoMaximoSinFiltros(desde, hasta, usuarioId, sedeId);
 
-    const build = this.buildWhereAsistencias({
+    const rows = await this.obtenerDetalleAnaliticoRows({
       desde: desde!,
       hasta: hasta!,
       usuarioId,
       sedeId,
-      aliasAsistencia: "a",
-      aliasUsuario: "u",
-      usarAliasUsuarioEnUuid: true,
     });
-
-    const rows = await this.ds.query(
-      `
-      SELECT
-        a.fecha_hora::date               AS fecha,
-        TO_CHAR(a.fecha_hora, 'HH24:MI') AS hora,
-
-        TRIM(
-          COALESCE(u.nombre,'') || ' ' ||
-          COALESCE(u.apellido_paterno,'') || ' ' ||
-          COALESCE(u.apellido_materno,'')
-        ) AS empleado,
-
-        COALESCE(s.nombre,'')  AS sede,
-        COALESCE(ar.nombre,'') AS area,
-
-        CASE a.tipo
-          WHEN 'IN'  THEN 'ENTRADA'
-          WHEN 'OUT' THEN 'SALIDA'
-          ELSE COALESCE(a.tipo, '')
-        END AS tipo,
-
-        CASE a.evento
-          WHEN 'JORNADA_IN'     THEN 'Inicio de jornada'
-          WHEN 'JORNADA_OUT'    THEN 'Fin de jornada'
-          WHEN 'REFRIGERIO_IN'  THEN 'Entrada de refrigerio'
-          WHEN 'REFRIGERIO_OUT' THEN 'Salida a refrigerio'
-          WHEN 'ALMUERZO_IN'    THEN 'Entrada de almuerzo'
-          WHEN 'ALMUERZO_OUT'   THEN 'Salida a almuerzo'
-          WHEN 'BREAK_IN'       THEN 'Entrada de break'
-          WHEN 'BREAK_OUT'      THEN 'Salida a break'
-          ELSE COALESCE(a.evento, '')
-        END AS evento,
-
-        COALESCE(a.minutos_tarde, 0)      AS minutos_tarde,
-        COALESCE(a.metodo, '')            AS metodo,
-        COALESCE(a.estado_validacion, '') AS estado_validacion
-      FROM asistencias a
-      JOIN usuarios u ON u.id = a.usuario_id
-      LEFT JOIN sedes s ON s.id = u.sede_id
-      LEFT JOIN areas ar ON ar.id = u.area_id
-      WHERE ${build.where}
-      ORDER BY empleado, fecha, hora
-      `,
-      build.params,
-    );
 
     const { usuarioLabel, sedeLabel } = await this.resolverEtiquetasFiltros(
       usuarioId,
@@ -1416,8 +1668,8 @@ export class ReportesController {
     );
 
     const pageConfig = {
-      margin: 24,
-      size: "LEGAL" as const,
+      margin: 20,
+      size: "TABLOID" as const,
       layout: "landscape" as const,
     };
 
@@ -1425,15 +1677,15 @@ export class ReportesController {
     doc.pipe(res);
 
     const drawPageTitle = () => {
-      this.addLogoIfExists(doc, 90, doc.page.margins.left, 14);
+      this.addLogoIfExists(doc, 88, doc.page.margins.left, 12);
 
       doc
         .font("Helvetica-Bold")
         .fontSize(15)
         .fillColor("#111")
-        .text("Asistencia - Detalle de marcajes", 0, 24, { align: "center" });
+        .text("Asistencia - Detalle de marcajes", 0, 22, { align: "center" });
 
-      doc.moveDown(1.1);
+      doc.moveDown(1.0);
       doc.font("Helvetica").fontSize(9).fillColor("#222");
 
       const periodoTxt = `Periodo: ${this.formatDatePEFromDateOnly(
@@ -1443,22 +1695,26 @@ export class ReportesController {
 
       doc.text(periodoTxt, { align: "center" });
       doc.text(filtrosTxt, { align: "center" });
-      doc.moveDown(0.8);
+      doc.moveDown(0.7);
     };
+
+    const fmtNum = (n: any) => String(Number(n) || 0);
+    const fmtDec = (n: any) => (Number(n) || 0).toFixed(2);
 
     drawPageTitle();
 
     const col = {
-      fecha: 58,
-      hora: 42,
-      empleado: 185,
-      sede: 88,
-      area: 82,
-      tipo: 56,
-      evento: 155,
-      tarde: 54,
-      metodo: 78,
-      estado: 72,
+      fecha: 55,
+      hora: 38,
+      empleado: 170,
+      sede: 85,
+      area: 92,
+      evento: 145,
+      minMarca: 42,
+      tardDia: 42,
+      minAcum: 46,
+      horasAcum: 48,
+      estado: 62,
     };
 
     const tableWidth =
@@ -1467,10 +1723,11 @@ export class ReportesController {
       col.empleado +
       col.sede +
       col.area +
-      col.tipo +
       col.evento +
-      col.tarde +
-      col.metodo +
+      col.minMarca +
+      col.tardDia +
+      col.minAcum +
+      col.horasAcum +
       col.estado;
 
     const contentWidth =
@@ -1481,20 +1738,12 @@ export class ReportesController {
 
     let y = doc.y;
 
-    const paddingX = 4;
-    const paddingY = 4;
-    const minRowH = 20;
-
-    const fmtFechaPE = (d: any) => {
-      const dt = d instanceof Date ? d : new Date(d);
-      const dd = String(dt.getDate()).padStart(2, "0");
-      const mm = String(dt.getMonth() + 1).padStart(2, "0");
-      const yy = dt.getFullYear();
-      return `${dd}/${mm}/${yy}`;
-    };
+    const paddingX = 3;
+    const paddingY = 3;
+    const minRowH = 18;
 
     const getTextHeight = (text: any, w: number, bold = false) => {
-      doc.font(bold ? "Helvetica-Bold" : "Helvetica").fontSize(8.2);
+      doc.font(bold ? "Helvetica-Bold" : "Helvetica").fontSize(7.6);
       return doc.heightOfString(String(text ?? ""), {
         width: w - paddingX * 2,
         align: "left",
@@ -1521,21 +1770,21 @@ export class ReportesController {
 
       if (header) {
         doc.save();
-        doc.roundedRect(x, yPos, w, h, 2).fill("#eaeaea");
+        doc.rect(x, yPos, w, h).fill("#E9EFF7");
         doc.restore();
       }
 
       doc
         .save()
-        .lineWidth(0.5)
-        .strokeColor("#9a9a9a")
+        .lineWidth(0.4)
+        .strokeColor("#A6A6A6")
         .rect(x, yPos, w, h)
         .stroke()
         .restore();
 
       doc
         .font(bold ? "Helvetica-Bold" : "Helvetica")
-        .fontSize(8.2)
+        .fontSize(7.6)
         .fillColor(textColor)
         .text(String(text ?? ""), x + paddingX, yPos + paddingY, {
           width: w - paddingX * 2,
@@ -1544,9 +1793,9 @@ export class ReportesController {
     };
 
     const drawHeader = () => {
-      const h = 22;
-
+      const h = 21;
       let x = startX;
+
       drawCell("Fecha", x, col.fecha, y, h, {
         bold: true,
         header: true,
@@ -1581,32 +1830,39 @@ export class ReportesController {
       });
       x += col.area;
 
-      drawCell("Tipo", x, col.tipo, y, h, {
-        bold: true,
-        header: true,
-        align: "center",
-      });
-      x += col.tipo;
-
       drawCell("Evento", x, col.evento, y, h, {
         bold: true,
         header: true,
       });
       x += col.evento;
 
-      drawCell("Min. tarde", x, col.tarde, y, h, {
+      drawCell("Min.T", x, col.minMarca, y, h, {
         bold: true,
         header: true,
         align: "center",
       });
-      x += col.tarde;
+      x += col.minMarca;
 
-      drawCell("Método", x, col.metodo, y, h, {
+      drawCell("T.Día", x, col.tardDia, y, h, {
         bold: true,
         header: true,
         align: "center",
       });
-      x += col.metodo;
+      x += col.tardDia;
+
+      drawCell("M.Acum", x, col.minAcum, y, h, {
+        bold: true,
+        header: true,
+        align: "center",
+      });
+      x += col.minAcum;
+
+      drawCell("H.Acum", x, col.horasAcum, y, h, {
+        bold: true,
+        header: true,
+        align: "center",
+      });
+      x += col.horasAcum;
 
       drawCell("Estado", x, col.estado, y, h, {
         bold: true,
@@ -1620,28 +1876,19 @@ export class ReportesController {
     drawHeader();
 
     for (const r of rows) {
-      const estado = String(r.estado_validacion || "")
-        .trim()
-        .toLowerCase();
-      const colorEstado =
-        estado === "rechazado"
-          ? "#dc2626"
-          : estado === "pendiente"
-            ? "#d97706"
-            : "#111";
-
       const rowH = Math.max(
         minRowH,
-        getTextHeight(fmtFechaPE(r.fecha), col.fecha) + paddingY * 2,
+        getTextHeight(r.fecha, col.fecha) + paddingY * 2,
         getTextHeight(r.hora, col.hora) + paddingY * 2,
         getTextHeight(r.empleado, col.empleado) + paddingY * 2,
         getTextHeight(r.sede, col.sede) + paddingY * 2,
         getTextHeight(r.area, col.area) + paddingY * 2,
-        getTextHeight(r.tipo, col.tipo) + paddingY * 2,
         getTextHeight(r.evento, col.evento) + paddingY * 2,
-        getTextHeight(String(r.minutos_tarde ?? 0), col.tarde) + paddingY * 2,
-        getTextHeight(r.metodo, col.metodo) + paddingY * 2,
-        getTextHeight(r.estado_validacion, col.estado) + paddingY * 2,
+        getTextHeight(fmtNum(r.minutos_tarde), col.minMarca) + paddingY * 2,
+        getTextHeight(fmtNum(r.tardanzas_dia), col.tardDia) + paddingY * 2,
+        getTextHeight(fmtNum(r.minutos_acumulados), col.minAcum) + paddingY * 2,
+        getTextHeight(fmtDec(r.horas_acumuladas), col.horasAcum) + paddingY * 2,
+        getTextHeight(r.estado_validacion || "-", col.estado) + paddingY * 2,
       );
 
       if (y + rowH > doc.page.height - doc.page.margins.bottom) {
@@ -1653,51 +1900,50 @@ export class ReportesController {
 
       let x = startX;
 
-      drawCell(fmtFechaPE(r.fecha), x, col.fecha, y, rowH, {
-        align: "center",
-      });
+      drawCell(r.fecha, x, col.fecha, y, rowH, { align: "center" });
       x += col.fecha;
 
-      drawCell(r.hora, x, col.hora, y, rowH, {
-        align: "center",
-      });
+      drawCell(r.hora, x, col.hora, y, rowH, { align: "center" });
       x += col.hora;
 
       drawCell(r.empleado, x, col.empleado, y, rowH);
       x += col.empleado;
 
-      drawCell(r.sede, x, col.sede, y, rowH, {
-        align: "center",
-      });
+      drawCell(r.sede, x, col.sede, y, rowH, { align: "center" });
       x += col.sede;
 
-      drawCell(r.area, x, col.area, y, rowH, {
-        align: "center",
-      });
+      drawCell(r.area, x, col.area, y, rowH, { align: "center" });
       x += col.area;
-
-      drawCell(r.tipo, x, col.tipo, y, rowH, {
-        align: "center",
-      });
-      x += col.tipo;
 
       drawCell(r.evento, x, col.evento, y, rowH);
       x += col.evento;
 
-      drawCell(String(r.minutos_tarde ?? 0), x, col.tarde, y, rowH, {
+      drawCell(fmtNum(r.minutos_tarde), x, col.minMarca, y, rowH, {
         align: "center",
-        textColor: Number(r.minutos_tarde) > 0 ? "#dc2626" : "#111",
+        textColor: r.minutos_tarde > 0 ? "#C00000" : "#111",
       });
-      x += col.tarde;
+      x += col.minMarca;
 
-      drawCell(r.metodo, x, col.metodo, y, rowH, {
+      drawCell(fmtNum(r.tardanzas_dia), x, col.tardDia, y, rowH, {
         align: "center",
+        textColor: r.tardanzas_dia > 0 ? "#C00000" : "#111",
       });
-      x += col.metodo;
+      x += col.tardDia;
+
+      drawCell(fmtNum(r.minutos_acumulados), x, col.minAcum, y, rowH, {
+        align: "center",
+        textColor: r.minutos_acumulados > 0 ? "#1F4E78" : "#111",
+      });
+      x += col.minAcum;
+
+      drawCell(fmtDec(r.horas_acumuladas), x, col.horasAcum, y, rowH, {
+        align: "center",
+        textColor: r.minutos_acumulados > 0 ? "#1F4E78" : "#111",
+      });
+      x += col.horasAcum;
 
       drawCell(r.estado_validacion || "-", x, col.estado, y, rowH, {
         align: "center",
-        textColor: colorEstado,
       });
 
       y += rowH;
@@ -1705,6 +1951,7 @@ export class ReportesController {
 
     doc.end();
   }
+
   // ============================================
   // Reporte maestro usuarios
   // ============================================

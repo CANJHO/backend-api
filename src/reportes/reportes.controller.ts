@@ -954,6 +954,8 @@ export class ReportesController {
       lab: 40,
       asis: 40,
       ausi: 46,
+      tard_ing: 46,
+      tard_ref: 46,
       tard: 46,
       hhtard: 58,
       hhsal: 58,
@@ -993,11 +995,14 @@ export class ReportesController {
       x += col.asis;
       doc.text("Aus.I", x, y, { width: col.ausi, align: "center" });
       x += col.ausi;
-      doc.text("Tard.T", x, y, { width: col.tard, align: "center" });
-      x += col.tard;
+      doc.text("T.Ing", x, y, { width: col.tard_ing, align: "center" });
+      x += col.tard_ing;
+      doc.text("T.Ref", x, y, { width: col.tard_ref, align: "center" });
+      x += col.tard_ref;
+      doc.text("T.Total", x, y, { width: col.tard, align: "center" });
       doc.text("HH:Tard", x, y, { width: col.hhtard, align: "center" });
       x += col.hhtard;
-      doc.text("HH:Sal", x, y, { width: col.hhsal, align: "center" });
+      doc.text("HH:Acum", x, y, { width: col.hhsal, align: "center" });
 
       doc
         .moveTo(startX, y + 12)
@@ -1036,6 +1041,17 @@ export class ReportesController {
         align: "center",
       });
       x += col.ausi;
+      doc.text(String(r.tardanzas_jornada_in ?? 0), x, y, {
+        width: col.tard_ing,
+        align: "center",
+      });
+      x += col.tard_ing;
+
+      doc.text(String(r.tardanzas_refrigerio_in ?? 0), x, y, {
+        width: col.tard_ref,
+        align: "center",
+      });
+      x += col.tard_ref;
 
       if ((r.tardanzas ?? 0) === 0) doc.fillColor("#16a34a");
       else if ((r.tardanzas ?? 0) <= 2) doc.fillColor("#d97706");

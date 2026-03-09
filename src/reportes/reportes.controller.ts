@@ -917,21 +917,27 @@ export class ReportesController {
       `attachment; filename="reporte_asistencias_resumen.pdf"`,
     );
 
-    const doc = new PDFDocument({ margin: 36, size: "A4" });
+    // ✅ Landscape para que entren bien todas las columnas
+    const doc = new PDFDocument({
+      margin: 24,
+      size: "A4",
+      layout: "landscape",
+    });
     doc.pipe(res);
 
     const logoPath = path.join(process.cwd(), "public", "logo_negro.png");
     if (fs.existsSync(logoPath)) {
-      doc.image(logoPath, doc.page.margins.left, 18, { width: 110 });
+      doc.image(logoPath, doc.page.margins.left, 16, { width: 95 });
     }
 
     doc
       .font("Helvetica-Bold")
       .fontSize(16)
-      .text("Reporte de Asistencias - Resumen", 0, 30, { align: "center" });
+      .fillColor("#111")
+      .text("Reporte de Asistencias - Resumen", 0, 24, { align: "center" });
 
-    doc.moveDown(1.7);
-    doc.font("Helvetica").fontSize(10);
+    doc.moveDown(1.6);
+    doc.font("Helvetica").fontSize(10).fillColor("#111");
 
     const periodoTxt = `Periodo: ${this.formatDatePEFromDateOnly(
       startDate,
@@ -944,29 +950,33 @@ export class ReportesController {
     doc.text(periodoTxt, doc.page.margins.left, doc.y);
     doc.text(filtrosTxt, doc.page.margins.left, doc.y + 2);
 
-    doc.moveDown(1.0);
+    doc.moveDown(1);
 
     const rows: ResumenRow[] = result.data as ResumenRow[];
 
+    // ✅ anchos ajustados para landscape
     const col = {
-      rk: 26,
-      usuario: 210,
-      lab: 40,
-      asis: 40,
-      ausi: 46,
-      tard_ing: 46,
-      tard_ref: 46,
+      rk: 24,
+      usuario: 260,
+      lab: 38,
+      asis: 38,
+      ausi: 40,
+      tard_ing: 42,
+      tard_ref: 42,
       tard: 46,
       hhtard: 58,
       hhsal: 58,
     };
 
+    // ✅ ahora sí suma todas las columnas
     const tableWidth =
       col.rk +
       col.usuario +
       col.lab +
       col.asis +
       col.ausi +
+      col.tard_ing +
+      col.tard_ref +
       col.tard +
       col.hhtard +
       col.hhsal;
@@ -980,36 +990,73 @@ export class ReportesController {
     let y = doc.y;
 
     const drawHeader = () => {
-      doc.font("Helvetica-Bold").fontSize(9);
+      doc.font("Helvetica-Bold").fontSize(9).fillColor("#111");
 
-      doc.text("Rk", startX, y, { width: col.rk, align: "center" });
+      doc.text("Rk", startX, y, {
+        width: col.rk,
+        align: "center",
+      });
+
       doc.text("Usuario", startX + col.rk, y, {
         width: col.usuario,
         align: "left",
       });
 
       let x = startX + col.rk + col.usuario;
-      doc.text("Lab.", x, y, { width: col.lab, align: "center" });
+
+      doc.text("Lab.", x, y, {
+        width: col.lab,
+        align: "center",
+      });
       x += col.lab;
-      doc.text("Asis.", x, y, { width: col.asis, align: "center" });
+
+      doc.text("Asis.", x, y, {
+        width: col.asis,
+        align: "center",
+      });
       x += col.asis;
-      doc.text("Aus.I", x, y, { width: col.ausi, align: "center" });
+
+      doc.text("Aus.I", x, y, {
+        width: col.ausi,
+        align: "center",
+      });
       x += col.ausi;
-      doc.text("T.Ing", x, y, { width: col.tard_ing, align: "center" });
+
+      doc.text("T.Ing", x, y, {
+        width: col.tard_ing,
+        align: "center",
+      });
       x += col.tard_ing;
-      doc.text("T.Ref", x, y, { width: col.tard_ref, align: "center" });
+
+      doc.text("T.Ref", x, y, {
+        width: col.tard_ref,
+        align: "center",
+      });
       x += col.tard_ref;
-      doc.text("T.Total", x, y, { width: col.tard, align: "center" });
-      doc.text("HH:Tard", x, y, { width: col.hhtard, align: "center" });
+
+      doc.text("T.Total", x, y, {
+        width: col.tard,
+        align: "center",
+      });
+      x += col.tard; // ✅ este faltaba
+
+      doc.text("HH:Tard", x, y, {
+        width: col.hhtard,
+        align: "center",
+      });
       x += col.hhtard;
-      doc.text("HH:Acum", x, y, { width: col.hhsal, align: "center" });
+
+      doc.text("HH:Acum", x, y, {
+        width: col.hhsal,
+        align: "center",
+      });
 
       doc
-        .moveTo(startX, y + 12)
-        .lineTo(startX + tableWidth, y + 12)
+        .moveTo(startX, y + 14)
+        .lineTo(startX + tableWidth, y + 14)
         .stroke();
 
-      y += 18;
+      y += 20;
       doc.font("Helvetica").fontSize(9).fillColor("#111");
     };
 
@@ -1020,27 +1067,32 @@ export class ReportesController {
         width: col.rk,
         align: "center",
       });
+
       doc.text(r.usuario, startX + col.rk, y, {
         width: col.usuario,
         align: "left",
       });
 
       let x = startX + col.rk + col.usuario;
+
       doc.text(String(r.dias_laborables ?? 0), x, y, {
         width: col.lab,
         align: "center",
       });
       x += col.lab;
+
       doc.text(String(r.dias_con_asistencia ?? 0), x, y, {
         width: col.asis,
         align: "center",
       });
       x += col.asis;
+
       doc.text(String(r.ausencias_injustificadas ?? 0), x, y, {
         width: col.ausi,
         align: "center",
       });
       x += col.ausi;
+
       doc.text(String(r.tardanzas_jornada_in ?? 0), x, y, {
         width: col.tard_ing,
         align: "center",
@@ -1053,6 +1105,7 @@ export class ReportesController {
       });
       x += col.tard_ref;
 
+      // ✅ semáforo solo en total
       if ((r.tardanzas ?? 0) === 0) doc.fillColor("#16a34a");
       else if ((r.tardanzas ?? 0) <= 2) doc.fillColor("#d97706");
       else doc.fillColor("#dc2626");
@@ -1076,15 +1129,19 @@ export class ReportesController {
         align: "center",
       });
 
-      y += 14;
+      y += 16;
     };
 
     drawHeader();
 
     for (const r of rows) {
-      if (y > doc.page.height - doc.page.margins.bottom - 18) {
-        doc.addPage();
-        y = doc.y;
+      if (y > doc.page.height - doc.page.margins.bottom - 20) {
+        doc.addPage({
+          margin: 24,
+          size: "A4",
+          layout: "landscape",
+        });
+        y = doc.page.margins.top;
         drawHeader();
       }
       drawRow(r);
@@ -1092,7 +1149,6 @@ export class ReportesController {
 
     doc.end();
   }
-
   // ==========================
   // DETALLE - EXCEL
   // ==========================

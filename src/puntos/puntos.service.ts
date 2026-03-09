@@ -1,5 +1,9 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
-import { DataSource } from 'typeorm';
+import {
+  Injectable,
+  BadRequestException,
+  NotFoundException,
+} from "@nestjs/common";
+import { DataSource } from "typeorm";
 
 @Injectable()
 export class PuntosService {
@@ -12,33 +16,42 @@ export class PuntosService {
   async list(sedeId?: string) {
     if (!sedeId) {
       return this.ds.query(
-        `SELECT * FROM puntos_trabajo ORDER BY created_at DESC`
+        `SELECT * FROM puntos_trabajo ORDER BY created_at DESC`,
       );
     }
     return this.ds.query(
       `SELECT * FROM puntos_trabajo 
         WHERE sede_id = $1
         ORDER BY created_at DESC`,
-      [sedeId]
+      [sedeId],
     );
   }
 
   async get(id: string) {
-    const r = await this.ds.query(`SELECT * FROM puntos_trabajo WHERE id=$1`, [id]);
-    if (!r[0]) throw new NotFoundException('Punto no existe');
+    const r = await this.ds.query(`SELECT * FROM puntos_trabajo WHERE id=$1`, [
+      id,
+    ]);
+    if (!r[0]) throw new NotFoundException("Punto no existe");
     return r[0];
   }
 
   async create(dto: any) {
     if (!dto.nombre || !dto.lat || !dto.lng) {
-      throw new BadRequestException('Faltan datos obligatorios');
+      throw new BadRequestException("Faltan datos obligatorios");
     }
 
     const res = await this.ds.query(
       `INSERT INTO puntos_trabajo (nombre, lat, lng, radio_m, activo, sede_id)
        VALUES ($1,$2,$3,COALESCE($4,120),COALESCE($5,true),$6)
        RETURNING id`,
-      [dto.nombre, dto.lat, dto.lng, dto.radio_m, dto.activo, dto.sede_id || null]
+      [
+        dto.nombre,
+        dto.lat,
+        dto.lng,
+        dto.radio_m,
+        dto.activo,
+        dto.sede_id || null,
+      ],
     );
 
     return this.get(res[0].id);
@@ -54,7 +67,7 @@ export class PuntosService {
         activo = COALESCE($6,activo),
         sede_id = COALESCE($7,sede_id)
        WHERE id=$1`,
-      [id, dto.nombre, dto.lat, dto.lng, dto.radio_m, dto.activo, dto.sede_id]
+      [id, dto.nombre, dto.lat, dto.lng, dto.radio_m, dto.activo, dto.sede_id],
     );
     return this.get(id);
   }
@@ -69,21 +82,22 @@ export class PuntosService {
   // ───────────────────────────────────────────────
 
   async asignar(dto: any) {
-    const { punto_id, usuario_id, fecha_inicio, fecha_fin, supervisor_id } = dto;
+    const { punto_id, usuario_id, fecha_inicio, fecha_fin, supervisor_id } =
+      dto;
 
     if (!punto_id || !usuario_id || !fecha_inicio || !fecha_fin) {
-      throw new BadRequestException('Datos incompletos');
+      throw new BadRequestException("Datos incompletos");
     }
 
     // validar fechas
     if (new Date(fecha_inicio) >= new Date(fecha_fin)) {
-      throw new BadRequestException('Rango de fechas inválido');
+      throw new BadRequestException("Rango de fechas inválido");
     }
 
     // validar que el punto exista y esté activo
     const punto = await this.get(punto_id);
     if (!punto.activo) {
-      throw new BadRequestException('Punto inactivo');
+      throw new BadRequestException("Punto inactivo");
     }
 
     // validar que no haya solapamientos vigentes
@@ -99,11 +113,13 @@ export class PuntosService {
               OR
               (fecha_inicio BETWEEN $2 AND $3)
           )`,
-      [usuario_id, fecha_inicio, fecha_fin]
+      [usuario_id, fecha_inicio, fecha_fin],
     );
 
     if (solap.length > 0) {
-      throw new BadRequestException('El usuario ya tiene un punto asignado en este rango');
+      throw new BadRequestException(
+        "El usuario ya tiene un punto asignado en este rango",
+      );
     }
 
     // insertar asignación
@@ -111,7 +127,7 @@ export class PuntosService {
       `INSERT INTO asignaciones_punto (punto_id, usuario_id, fecha_inicio, fecha_fin, supervisor_id, estado)
        VALUES ($1,$2,$3,$4,$5,'VIGENTE')
        RETURNING id`,
-      [punto_id, usuario_id, fecha_inicio, fecha_fin, supervisor_id || null]
+      [punto_id, usuario_id, fecha_inicio, fecha_fin, supervisor_id || null],
     );
   }
 
@@ -121,11 +137,11 @@ export class PuntosService {
   }
 
   // Cambia estado de asignación
-  async cambiarEstado(id: string, estado: 'VIGENTE' | 'CERRADA' | 'ANULADA') {
-    await this.ds.query(
-      `UPDATE asignaciones_punto SET estado=$2 WHERE id=$1`,
-      [id, estado]
-    );
+  async cambiarEstado(id: string, estado: "VIGENTE" | "CERRADA" | "ANULADA") {
+    await this.ds.query(`UPDATE asignaciones_punto SET estado=$2 WHERE id=$1`, [
+      id,
+      estado,
+    ]);
     return { ok: true };
   }
 
@@ -140,7 +156,7 @@ export class PuntosService {
           AND ap.estado='VIGENTE'
           AND NOW() BETWEEN ap.fecha_inicio AND ap.fecha_fin
         ORDER BY ap.fecha_inicio DESC`,
-      [usuarioId]
+      [usuarioId],
     );
   }
 }

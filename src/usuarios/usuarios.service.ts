@@ -1,11 +1,15 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
-import { DataSource } from 'typeorm';
-import { join } from 'path';
-import * as fs from 'fs';
-import sharp from 'sharp';
-import * as QRCode from 'qrcode';
-import * as bcrypt from 'bcrypt';
-const bwipjs = require('bwip-js');
+import {
+  Injectable,
+  NotFoundException,
+  ConflictException,
+} from "@nestjs/common";
+import { DataSource } from "typeorm";
+import { join } from "path";
+import * as fs from "fs";
+import sharp from "sharp";
+import * as QRCode from "qrcode";
+import * as bcrypt from "bcrypt";
+const bwipjs = require("bwip-js");
 
 @Injectable()
 export class UsuariosService {
@@ -82,28 +86,30 @@ export class UsuariosService {
 
   async get(id: string) {
     const r = await this.ds.query(`SELECT * FROM usuarios WHERE id=$1`, [id]);
-    if (!r[0]) throw new NotFoundException('Usuario no existe');
+    if (!r[0]) throw new NotFoundException("Usuario no existe");
     return r[0];
   }
 
-async create(dto: any) {
-  const plainPassword =
-    (dto.password && String(dto.password).trim()) ||
-    dto.numero_documento ||
-    dto.dni ||
-    null;
+  async create(dto: any) {
+    const plainPassword =
+      (dto.password && String(dto.password).trim()) ||
+      dto.numero_documento ||
+      dto.dni ||
+      null;
 
-  if (!plainPassword) {
-    throw new Error('No se pudo determinar la contraseña por defecto del usuario.');
-  }
+    if (!plainPassword) {
+      throw new Error(
+        "No se pudo determinar la contraseña por defecto del usuario.",
+      );
+    }
 
-  const passwordHash = await bcrypt.hash(String(plainPassword), 10);
+    const passwordHash = await bcrypt.hash(String(plainPassword), 10);
 
-  let r: any[];
+    let r: any[];
 
-  try {
-    r = await this.ds.query(
-      `INSERT INTO usuarios (
+    try {
+      r = await this.ds.query(
+        `INSERT INTO usuarios (
           dni,
           nombre,
           apellido_paterno,
@@ -133,43 +139,45 @@ async create(dto: any) {
           $15
         )
         RETURNING id`,
-      [
-        dto.dni || dto.numero_documento,
-        dto.nombre,
-        dto.apellido_paterno || null,
-        dto.apellido_materno || null,
-        dto.fecha_nacimiento || null,
-        dto.rol_id,
-        dto.sede_id || null,
-        dto.activo,
-        passwordHash,
-        dto.tipo_documento || 'DNI',
-        dto.numero_documento,
-        dto.email_personal || null,
-        dto.email_institucional || null,
-        dto.telefono_celular || null,
-        dto.area_id || null,
-      ],
-    );
-  } catch (e: any) {
-    // Unique constraint violada (tipo_documento, numero_documento)
-    if (e?.code === '23505') {
-      throw new ConflictException('El número de documento ya está registrado.');
+        [
+          dto.dni || dto.numero_documento,
+          dto.nombre,
+          dto.apellido_paterno || null,
+          dto.apellido_materno || null,
+          dto.fecha_nacimiento || null,
+          dto.rol_id,
+          dto.sede_id || null,
+          dto.activo,
+          passwordHash,
+          dto.tipo_documento || "DNI",
+          dto.numero_documento,
+          dto.email_personal || null,
+          dto.email_institucional || null,
+          dto.telefono_celular || null,
+          dto.area_id || null,
+        ],
+      );
+    } catch (e: any) {
+      // Unique constraint violada (tipo_documento, numero_documento)
+      if (e?.code === "23505") {
+        throw new ConflictException(
+          "El número de documento ya está registrado.",
+        );
+      }
+      throw e;
     }
-    throw e;
+
+    const idNuevo = r[0].id;
+
+    try {
+      await this.generarBarcode(idNuevo);
+      await this.generarQR(idNuevo);
+    } catch (e) {
+      console.error("Error generando barcode/QR al crear usuario:", e);
+    }
+
+    return this.get(idNuevo);
   }
-
-  const idNuevo = r[0].id;
-
-  try {
-    await this.generarBarcode(idNuevo);
-    await this.generarQR(idNuevo);
-  } catch (e) {
-    console.error('Error generando barcode/QR al crear usuario:', e);
-  }
-
-  return this.get(idNuevo);
-}
 
   async generarCodigosTodos() {
     // Solo los que tienen code_scannable (documento configurado)
@@ -191,7 +199,7 @@ async create(dto: any) {
         await this.generarQR(u.id);
         procesados++;
       } catch (e) {
-        console.error('Error generando códigos para usuario', u.id, e);
+        console.error("Error generando códigos para usuario", u.id, e);
         errores.push({ id: u.id, error: String(e) });
       }
     }
@@ -202,7 +210,6 @@ async create(dto: any) {
       errores,
     };
   }
-
 
   async update(id: string, dto: any) {
     // 1. Obtener el usuario actual para comparar documento
@@ -228,7 +235,7 @@ async create(dto: any) {
     if (documentoCambio) {
       if (!nuevoNumero) {
         throw new Error(
-          'No se puede actualizar contraseña: número de documento vacío.',
+          "No se puede actualizar contraseña: número de documento vacío.",
         );
       }
       nuevoPasswordHash = await bcrypt.hash(String(nuevoNumero), 10);
@@ -236,7 +243,7 @@ async create(dto: any) {
 
     // 3. Normalizar fecha_nacimiento: si viene "" -> null
     const fechaNacimientoParam =
-      dto.fecha_nacimiento === '' || dto.fecha_nacimiento === undefined
+      dto.fecha_nacimiento === "" || dto.fecha_nacimiento === undefined
         ? null
         : dto.fecha_nacimiento;
 
@@ -263,7 +270,7 @@ async create(dto: any) {
         dto.nombre,
         dto.apellido_paterno,
         dto.apellido_materno,
-        fechaNacimientoParam,      // 👈 aquí ya NO va ""
+        fechaNacimientoParam, // 👈 aquí ya NO va ""
         dto.rol_id,
         dto.sede_id,
         dto.area_id,
@@ -273,7 +280,7 @@ async create(dto: any) {
         dto.email_personal,
         dto.email_institucional,
         dto.telefono_celular,
-        nuevoPasswordHash,         // solo si cambió documento
+        nuevoPasswordHash, // solo si cambió documento
       ],
     );
 
@@ -286,17 +293,16 @@ async create(dto: any) {
     return this.get(id);
   }
 
-
   async uploadFoto(id: string, buffer: Buffer, filename: string) {
-    const dir = process.env.UPLOAD_DIR || 'uploads';
+    const dir = process.env.UPLOAD_DIR || "uploads";
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     const out = join(dir, `foto_${id}.jpg`);
     await sharp(buffer)
-      .resize(600, 600, { fit: 'cover' })
+      .resize(600, 600, { fit: "cover" })
       .jpeg({ quality: 82 })
       .toFile(out);
     const url = `${
-      process.env.PUBLIC_BASE_URL || ''
+      process.env.PUBLIC_BASE_URL || ""
     }/files/${out.split(/[\\/]/).pop()}`;
     await this.ds.query(`UPDATE usuarios SET foto_perfil_url=$2 WHERE id=$1`, [
       id,
@@ -311,62 +317,58 @@ async create(dto: any) {
     // code_scannable ya lo calcula Postgres
     const code =
       u.code_scannable ||
-      ((u.tipo_documento === 'CE' ? 'C' : 'D') + u.numero_documento);
+      (u.tipo_documento === "CE" ? "C" : "D") + u.numero_documento;
 
     const png = await bwipToBuffer({
-      bcid: 'code128',
+      bcid: "code128",
       text: code,
       scale: 3,
       height: 12,
       includetext: true,
     });
 
-    const dir = process.env.UPLOAD_DIR || 'uploads';
+    const dir = process.env.UPLOAD_DIR || "uploads";
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
     const out = join(dir, `barcode_${id}.png`);
     fs.writeFileSync(out, png);
 
     const url = `${
-      process.env.PUBLIC_BASE_URL || ''
+      process.env.PUBLIC_BASE_URL || ""
     }/files/${out.split(/[\\/]/).pop()}`;
 
     // 👇 IMPORTANTE: ya NO intentamos actualizar code_scannable
-    await this.ds.query(
-      `UPDATE usuarios SET barcode_url=$2 WHERE id=$1`,
-      [id, url],
-    );
+    await this.ds.query(`UPDATE usuarios SET barcode_url=$2 WHERE id=$1`, [
+      id,
+      url,
+    ]);
 
     return { barcode_url: url, code_scannable: u.code_scannable || code };
   }
-
 
   async generarQR(id: string) {
     const u = await this.get(id);
 
     const code =
       u.code_scannable ||
-      ((u.tipo_documento === 'CE' ? 'C' : 'D') + u.numero_documento);
+      (u.tipo_documento === "CE" ? "C" : "D") + u.numero_documento;
 
-    const dir = process.env.UPLOAD_DIR || 'uploads';
+    const dir = process.env.UPLOAD_DIR || "uploads";
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
     const out = join(dir, `qr_${id}.png`);
     await QRCode.toFile(out, code, { margin: 1, width: 512 });
 
     const url = `${
-      process.env.PUBLIC_BASE_URL || ''
+      process.env.PUBLIC_BASE_URL || ""
     }/files/${out.split(/[\\/]/).pop()}`;
 
     // 👇 Igual: solo actualizamos la URL, no el code_scannable
-    await this.ds.query(
-      `UPDATE usuarios SET qr_url=$2 WHERE id=$1`,
-      [id, url],
-    );
+    await this.ds.query(`UPDATE usuarios SET qr_url=$2 WHERE id=$1`, [id, url]);
 
     return { qr_url: url, code_scannable: u.code_scannable || code };
   }
-    async cambiarEstado(id: string, activo: boolean) {
+  async cambiarEstado(id: string, activo: boolean) {
     if (activo) {
       // Reactivar usuario
       await this.ds.query(
@@ -391,13 +393,11 @@ async create(dto: any) {
     // Devolvemos el usuario actualizado
     return this.get(id);
   }
-
-
 }
 
 function bwipToBuffer(opts: any): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    (bwipjs as any).toBuffer(opts, (err: Error, png: Buffer) => {
+    bwipjs.toBuffer(opts, (err: Error, png: Buffer) => {
       if (err) reject(err);
       else resolve(png);
     });

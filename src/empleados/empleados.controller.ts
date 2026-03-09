@@ -9,18 +9,18 @@ import {
   UploadedFile,
   ParseUUIDPipe,
   Res,
-} from '@nestjs/common';
-import { EmpleadosService } from './empleados.service';
-import { FileInterceptor } from '@nestjs/platform-express';
-import type { Response } from 'express';
+} from "@nestjs/common";
+import { EmpleadosService } from "./empleados.service";
+import { FileInterceptor } from "@nestjs/platform-express";
+import type { Response } from "express";
 
-@Controller('empleados')
+@Controller("empleados")
 export class EmpleadosController {
   constructor(private readonly svc: EmpleadosService) {}
 
   // ✅ NUEVO: Cumpleaños próximos (para modal + alertas)
-  @Get('cumpleanos-proximos')
-  async cumpleanosProximos(@Query('dias') dias = '5') {
+  @Get("cumpleanos-proximos")
+  async cumpleanosProximos(@Query("dias") dias = "5") {
     const n = Number(dias);
     const diasSafe = !n || n < 0 ? 5 : n > 30 ? 30 : n;
     return this.svc.listarCumpleanosProximos(diasSafe);
@@ -29,9 +29,9 @@ export class EmpleadosController {
   // ====== Listado de empleados (para el panel) ======
   @Get()
   async listar(
-    @Query('pagina') pagina = '1',
-    @Query('limite') limite = '20',
-    @Query('buscar') buscar?: string,
+    @Query("pagina") pagina = "1",
+    @Query("limite") limite = "20",
+    @Query("buscar") buscar?: string,
   ) {
     const pag = Number(pagina) || 1;
     const lim = Number(limite) || 20;
@@ -39,16 +39,16 @@ export class EmpleadosController {
   }
 
   // ====== Carnet PDF del empleado ======
-  @Get(':id/carnet-pdf')
+  @Get(":id/carnet-pdf")
   async carnetPdf(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param("id", new ParseUUIDPipe({ version: "4" })) id: string,
     @Res() res: Response,
   ) {
     const pdfBuffer = await this.svc.generarCarnetPdf(id);
 
-    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
-      'Content-Disposition',
+      "Content-Disposition",
       `inline; filename="carnet-empleado-${id}.pdf"`,
     );
 
@@ -56,25 +56,23 @@ export class EmpleadosController {
   }
 
   // ====== Ficha del empleado ======
-  @Get(':id/ficha')
-  async ficha(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
-  ) {
+  @Get(":id/ficha")
+  async ficha(@Param("id", new ParseUUIDPipe({ version: "4" })) id: string) {
     return this.svc.obtenerFichaEmpleado(id);
   }
 
   // ====== Kiosko: buscar empleado por código escaneable ======
-  @Get('lookup')
-  async lookup(@Query('code') code?: string) {
-    if (!code) throw new BadRequestException('Falta el parámetro ?code');
+  @Get("lookup")
+  async lookup(@Query("code") code?: string) {
+    if (!code) throw new BadRequestException("Falta el parámetro ?code");
     return this.svc.lookupByCode(code);
   }
 
   // ====== Subir / actualizar foto de empleado ======
-  @Post(':id/foto')
-  @UseInterceptors(FileInterceptor('foto'))
+  @Post(":id/foto")
+  @UseInterceptors(FileInterceptor("foto"))
   async subirFoto(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param("id", new ParseUUIDPipe({ version: "4" })) id: string,
     @UploadedFile() archivo?: Express.Multer.File,
   ) {
     if (!archivo) {

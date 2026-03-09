@@ -1,10 +1,10 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
-import { DataSource } from 'typeorm';
-import * as bcrypt from 'bcrypt';
-import { ConfigService } from '@nestjs/config';
+import { Injectable, UnauthorizedException } from "@nestjs/common";
+import { JwtService } from "@nestjs/jwt";
+import { DataSource } from "typeorm";
+import * as bcrypt from "bcrypt";
+import { ConfigService } from "@nestjs/config";
 
-export type RolSistema = 'Gerencia' | 'RRHH' | 'Empleado';
+export type RolSistema = "Gerencia" | "RRHH" | "Empleado";
 
 interface UsuarioRow {
   id: string;
@@ -13,7 +13,6 @@ interface UsuarioRow {
   numero_documento: string;
   password_hash: string | null;
   rol: RolSistema | null;
-  
 }
 
 export interface JwtUsuarioPayload {
@@ -22,8 +21,6 @@ export interface JwtUsuarioPayload {
   apellido_paterno: string | null;
   rol: RolSistema | null;
   doc: string;
-  
- 
 }
 
 @Injectable()
@@ -35,11 +32,11 @@ export class AuthService {
   ) {}
 
   private getJwtSecret(): string {
-    return this.cfg.get<string>('JWT_SECRET') || 'change_me_secret';
+    return this.cfg.get<string>("JWT_SECRET") || "change_me_secret";
   }
 
-    private getJwtExpiresIn(): number {
-    const raw = this.cfg.get<string>('JWT_EXPIRES_IN');
+  private getJwtExpiresIn(): number {
+    const raw = this.cfg.get<string>("JWT_EXPIRES_IN");
 
     // Si no hay valor → 3600 por defecto (1 hora)
     if (!raw) return 3600;
@@ -53,7 +50,6 @@ export class AuthService {
     // Devolver en segundos
     return n;
   }
-
 
   async login(doc: string, pass: string) {
     const rows: UsuarioRow[] = await this.ds.query(
@@ -72,18 +68,18 @@ export class AuthService {
 
     const user = rows[0];
     if (!user) {
-      throw new UnauthorizedException('Documento o contraseña inválidos');
+      throw new UnauthorizedException("Documento o contraseña inválidos");
     }
 
     if (user.password_hash) {
       const ok = await bcrypt.compare(pass, user.password_hash);
       if (!ok) {
-        throw new UnauthorizedException('Documento o contraseña inválidos');
+        throw new UnauthorizedException("Documento o contraseña inválidos");
       }
     } else {
       // Usuarios importados sin hash: solo permitimos pass vacío
       if (pass && pass.trim()) {
-        throw new UnauthorizedException('Documento o contraseña inválidos');
+        throw new UnauthorizedException("Documento o contraseña inválidos");
       }
     }
 
@@ -93,7 +89,6 @@ export class AuthService {
       apellido_paterno: user.apellido_paterno,
       rol: (user.rol as RolSistema) || null,
       doc: user.numero_documento,
-     
     };
 
     const token = await this.jwt.signAsync(payload, {

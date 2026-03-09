@@ -1,5 +1,5 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { DataSource } from 'typeorm';
+import { Injectable, NotFoundException } from "@nestjs/common";
+import { DataSource } from "typeorm";
 
 @Injectable()
 export class SedesService {
@@ -43,7 +43,7 @@ export class SedesService {
     );
 
     if (!rows[0]) {
-      throw new NotFoundException('Sede no existe');
+      throw new NotFoundException("Sede no existe");
     }
 
     return rows[0];
@@ -54,13 +54,7 @@ export class SedesService {
       `INSERT INTO sedes (nombre, lat, lng, activo, radio_m)
        VALUES ($1, $2, $3, COALESCE($4, true), COALESCE($5, 120))
        RETURNING id`,
-      [
-        dto.nombre,
-        dto.lat ?? null,
-        dto.lng ?? null,
-        dto.activo,
-        dto.radio_m,
-      ],
+      [dto.nombre, dto.lat ?? null, dto.lng ?? null, dto.activo, dto.radio_m],
     );
 
     return this.get(rows[0].id);
@@ -75,14 +69,7 @@ export class SedesService {
               activo  = COALESCE($5, activo),
               radio_m = COALESCE($6, radio_m)
         WHERE id = $1`,
-      [
-        id,
-        dto.nombre,
-        dto.lat,
-        dto.lng,
-        dto.activo,
-        dto.radio_m,
-      ],
+      [id, dto.nombre, dto.lat, dto.lng, dto.activo, dto.radio_m],
     );
 
     return this.get(id);
@@ -99,7 +86,7 @@ export class SedesService {
     );
 
     if (!r[0]) {
-      throw new NotFoundException('Sede no existe');
+      throw new NotFoundException("Sede no existe");
     }
 
     return r[0];

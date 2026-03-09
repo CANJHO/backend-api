@@ -9,52 +9,48 @@ import {
   Query,
   Req,
   UseGuards,
-} from '@nestjs/common';
-import { DataSource } from 'typeorm';
-import type { Request } from 'express';
-import { JwtGuard } from '../common/jwt.guard';
-import { Roles } from '../common/roles.decorator';
-import { RolesGuard } from '../common/roles.guard';
-import { BitacoraService } from '../common/bitacora.service';
+} from "@nestjs/common";
+import { DataSource } from "typeorm";
+import type { Request } from "express";
+import { JwtGuard } from "../common/jwt.guard";
+import { Roles } from "../common/roles.decorator";
+import { RolesGuard } from "../common/roles.guard";
+import { BitacoraService } from "../common/bitacora.service";
 
-type Evento =
-  | 'JORNADA_IN'
-  | 'REFRIGERIO_OUT'
-  | 'REFRIGERIO_IN'
-  | 'JORNADA_OUT';
+type Evento = "JORNADA_IN" | "REFRIGERIO_OUT" | "REFRIGERIO_IN" | "JORNADA_OUT";
 
 @UseGuards(JwtGuard, RolesGuard)
-@Controller('asistencias-admin')
+@Controller("asistencias-admin")
 export class AsistenciasAdminController {
   constructor(
     private ds: DataSource,
     private bitacora: BitacoraService,
   ) {}
 
-  private tipoPorEvento(evento: Evento): 'IN' | 'OUT' {
-    if (evento === 'JORNADA_IN' || evento === 'REFRIGERIO_IN') return 'IN';
-    return 'OUT';
+  private tipoPorEvento(evento: Evento): "IN" | "OUT" {
+    if (evento === "JORNADA_IN" || evento === "REFRIGERIO_IN") return "IN";
+    return "OUT";
   }
 
   private ensureMotivo(motivo?: string) {
     if (!motivo || !motivo.trim()) {
-      throw new BadRequestException('Motivo es obligatorio');
+      throw new BadRequestException("Motivo es obligatorio");
     }
   }
 
   private buildFechaHora(fecha: string, hora: string): string {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
-      throw new BadRequestException('Fecha inválida. Use YYYY-MM-DD');
+      throw new BadRequestException("Fecha inválida. Use YYYY-MM-DD");
     }
     if (!/^\d{2}:\d{2}(:\d{2})?$/.test(hora)) {
-      throw new BadRequestException('Hora inválida. Use HH:mm o HH:mm:ss');
+      throw new BadRequestException("Hora inválida. Use HH:mm o HH:mm:ss");
     }
     const hh = hora.length === 5 ? `${hora}:00` : hora;
     return `${fecha} ${hh}`;
   }
 
   @Get()
-  @Roles('RRHH', 'Gerencia')
+  @Roles("RRHH", "Gerencia")
   list(
     @Query()
     q: {
@@ -82,7 +78,7 @@ export class AsistenciasAdminController {
       p.push(q.estado);
       wh.push(`a.estado_validacion = $${p.length}`);
     }
-    const where = wh.length ? `WHERE ${wh.join(' AND ')}` : '';
+    const where = wh.length ? `WHERE ${wh.join(" AND ")}` : "";
     return this.ds.query(
       `SELECT a.*,
         u.nombre,
@@ -100,8 +96,8 @@ export class AsistenciasAdminController {
     );
   }
 
-  @Get('timeline')
-  @Roles('RRHH', 'Gerencia')
+  @Get("timeline")
+  @Roles("RRHH", "Gerencia")
   async timeline(
     @Query()
     q: {
@@ -109,10 +105,11 @@ export class AsistenciasAdminController {
       fecha?: string;
     },
   ) {
-    if (!q.usuarioId) throw new BadRequestException('usuarioId es obligatorio');
-    if (!q.fecha) throw new BadRequestException('fecha es obligatorio (YYYY-MM-DD)');
+    if (!q.usuarioId) throw new BadRequestException("usuarioId es obligatorio");
+    if (!q.fecha)
+      throw new BadRequestException("fecha es obligatorio (YYYY-MM-DD)");
     if (!/^\d{4}-\d{2}-\d{2}$/.test(q.fecha)) {
-      throw new BadRequestException('fecha inválida. Use YYYY-MM-DD');
+      throw new BadRequestException("fecha inválida. Use YYYY-MM-DD");
     }
 
     const emp = await this.ds.query(
@@ -134,7 +131,7 @@ export class AsistenciasAdminController {
     );
 
     if (!emp || emp.length === 0) {
-      throw new BadRequestException('No existe usuario con ese usuarioId');
+      throw new BadRequestException("No existe usuario con ese usuarioId");
     }
 
     const rows = await this.ds.query(
@@ -155,8 +152,8 @@ export class AsistenciasAdminController {
     };
   }
 
-  @Post('manual')
-  @Roles('RRHH')
+  @Post("manual")
+  @Roles("RRHH")
   async manual(
     @Req() req: Request,
     @Body()
@@ -169,14 +166,15 @@ export class AsistenciasAdminController {
       evidencia?: any;
     },
   ) {
-    if (!body?.usuarioId) throw new BadRequestException('usuarioId es obligatorio');
-    if (!body?.evento) throw new BadRequestException('evento es obligatorio');
+    if (!body?.usuarioId)
+      throw new BadRequestException("usuarioId es obligatorio");
+    if (!body?.evento) throw new BadRequestException("evento es obligatorio");
     this.ensureMotivo(body?.motivo);
 
     const fecha_hora = this.buildFechaHora(body.fecha, body.hora);
     const tipo = this.tipoPorEvento(body.evento);
-    const metodo = 'manual_supervisor';
-    const estado_validacion = 'aprobado';
+    const metodo = "manual_supervisor";
+    const estado_validacion = "aprobado";
 
     try {
       const inserted = await this.ds.query(
@@ -185,12 +183,19 @@ export class AsistenciasAdminController {
         VALUES ($1, $2::timestamp, $3, $4, $5, $6)
         RETURNING id
         `,
-        [body.usuarioId, fecha_hora, body.evento, tipo, metodo, estado_validacion],
+        [
+          body.usuarioId,
+          fecha_hora,
+          body.evento,
+          tipo,
+          metodo,
+          estado_validacion,
+        ],
       );
 
       const asistenciaId = inserted?.[0]?.id;
 
-      await this.bitacora.log(req, 'ASISTENCIA_MANUAL_CREAR', {
+      await this.bitacora.log(req, "ASISTENCIA_MANUAL_CREAR", {
         asistenciaId,
         usuarioId: body.usuarioId,
         fecha_hora,
@@ -204,20 +209,20 @@ export class AsistenciasAdminController {
 
       return { ok: true, id: asistenciaId };
     } catch (e: any) {
-      if (e?.code === '23505') {
+      if (e?.code === "23505") {
         throw new BadRequestException(
-          'Ya existe un marcaje para ese usuario, fecha/hora y evento (duplicado).',
+          "Ya existe un marcaje para ese usuario, fecha/hora y evento (duplicado).",
         );
       }
       throw e;
     }
   }
 
-  @Put(':id/anular')
-  @Roles('RRHH')
+  @Put(":id/anular")
+  @Roles("RRHH")
   async anular(
     @Req() req: Request,
-    @Param('id') id: string,
+    @Param("id") id: string,
     @Body() body: { motivo: string; evidencia?: any },
   ) {
     this.ensureMotivo(body?.motivo);
@@ -233,10 +238,10 @@ export class AsistenciasAdminController {
     );
 
     if (!updated || updated.length === 0) {
-      throw new BadRequestException('No existe asistencia con ese id');
+      throw new BadRequestException("No existe asistencia con ese id");
     }
 
-    await this.bitacora.log(req, 'ASISTENCIA_ANULAR', {
+    await this.bitacora.log(req, "ASISTENCIA_ANULAR", {
       asistencia: updated[0],
       motivo: body.motivo,
       evidencia: body.evidencia ?? null,
@@ -245,11 +250,11 @@ export class AsistenciasAdminController {
     return { ok: true };
   }
 
-  @Put(':id/aprobar')
-  @Roles('RRHH')
+  @Put(":id/aprobar")
+  @Roles("RRHH")
   async aprobar(
     @Req() req: Request,
-    @Param('id') id: string,
+    @Param("id") id: string,
     @Body() body: { motivo?: string },
   ) {
     const updated = await this.ds.query(
@@ -263,10 +268,10 @@ export class AsistenciasAdminController {
     );
 
     if (!updated || updated.length === 0) {
-      throw new BadRequestException('No existe asistencia con ese id');
+      throw new BadRequestException("No existe asistencia con ese id");
     }
 
-    await this.bitacora.log(req, 'ASISTENCIA_APROBAR', {
+    await this.bitacora.log(req, "ASISTENCIA_APROBAR", {
       asistencia: updated[0],
       motivo: body?.motivo?.trim() || null,
     });
@@ -274,11 +279,11 @@ export class AsistenciasAdminController {
     return { ok: true };
   }
 
-  @Put(':id/rechazar')
-  @Roles('RRHH')
+  @Put(":id/rechazar")
+  @Roles("RRHH")
   async rechazar(
     @Req() req: Request,
-    @Param('id') id: string,
+    @Param("id") id: string,
     @Body() body: { motivo?: string },
   ) {
     this.ensureMotivo(body?.motivo);
@@ -294,10 +299,10 @@ export class AsistenciasAdminController {
     );
 
     if (!updated || updated.length === 0) {
-      throw new BadRequestException('No existe asistencia con ese id');
+      throw new BadRequestException("No existe asistencia con ese id");
     }
 
-    await this.bitacora.log(req, 'ASISTENCIA_RECHAZAR', {
+    await this.bitacora.log(req, "ASISTENCIA_RECHAZAR", {
       asistencia: updated[0],
       motivo: body.motivo,
     });
@@ -305,14 +310,14 @@ export class AsistenciasAdminController {
     return { ok: true };
   }
 
-// ✅ NUEVO: pendiente más antiguo (1 usuario) - SOLO días anteriores (bloquea kiosko)
-@Get('pendiente')
-@Roles('RRHH', 'Gerencia')
-async pendiente(@Query() q: { usuarioId?: string }) {
-  if (!q.usuarioId) throw new BadRequestException('usuarioId es obligatorio');
+  // ✅ NUEVO: pendiente más antiguo (1 usuario) - SOLO días anteriores (bloquea kiosko)
+  @Get("pendiente")
+  @Roles("RRHH", "Gerencia")
+  async pendiente(@Query() q: { usuarioId?: string }) {
+    if (!q.usuarioId) throw new BadRequestException("usuarioId es obligatorio");
 
-  const rows = await this.ds.query(
-    `
+    const rows = await this.ds.query(
+      `
     WITH dias AS (
       SELECT
         a.usuario_id,
@@ -331,31 +336,31 @@ async pendiente(@Query() q: { usuarioId?: string }) {
     ORDER BY fecha ASC
     LIMIT 1
     `,
-    [q.usuarioId],
-  );
+      [q.usuarioId],
+    );
 
-  return {
-    usuario_id: q.usuarioId,
-    fecha_pendiente: rows?.[0]?.fecha_pendiente ?? null,
-  };
-}
+    return {
+      usuario_id: q.usuarioId,
+      fecha_pendiente: rows?.[0]?.fecha_pendiente ?? null,
+    };
+  }
 
-// ✅ NUEVO: pendientes más antiguos (muchos usuarios) - SOLO días anteriores (bloquea kiosko)
-@Get('pendientes')
-@Roles('RRHH', 'Gerencia')
-async pendientes(@Query() q: { usuarioIds?: string }) {
-  const raw = (q.usuarioIds || '').trim();
-  if (!raw) return [];
+  // ✅ NUEVO: pendientes más antiguos (muchos usuarios) - SOLO días anteriores (bloquea kiosko)
+  @Get("pendientes")
+  @Roles("RRHH", "Gerencia")
+  async pendientes(@Query() q: { usuarioIds?: string }) {
+    const raw = (q.usuarioIds || "").trim();
+    if (!raw) return [];
 
-  const ids = raw
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
+    const ids = raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
 
-  if (ids.length === 0) return [];
+    if (ids.length === 0) return [];
 
-  const rows = await this.ds.query(
-    `
+    const rows = await this.ds.query(
+      `
     WITH dias AS (
       SELECT
         a.usuario_id,
@@ -380,64 +385,65 @@ async pendientes(@Query() q: { usuarioIds?: string }) {
     FROM pendientes
     ORDER BY fecha_pendiente ASC
     `,
-    [ids],
-  );
+      [ids],
+    );
 
-  return rows;
-}
-
-// ✅ NUEVO: Resumen del día para dashboard (Inicio)
-// 🔧 FIX: KPI "pendientes" = SOLO pendientes de días anteriores a la fecha seleccionada
-@Get('resumen-dia')
-@Roles('RRHH', 'Gerencia')
-async resumenDia(
-  @Query()
-  q: {
-    fecha?: string;      // YYYY-MM-DD
-    usuarioIds?: string; // CSV
-  },
-) {
-  const fecha = (q.fecha || '').trim();
-  if (!fecha) throw new BadRequestException('fecha es obligatorio (YYYY-MM-DD)');
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
-    throw new BadRequestException('fecha inválida. Use YYYY-MM-DD');
+    return rows;
   }
 
-  const raw = (q.usuarioIds || '').trim();
-  if (!raw) {
-    return {
-      fecha,
-      total_empleados: 0,
-      marcaron_ingreso: 0,
-      no_marcaron_ingreso: 0,
-      tardanzas: 0,
-      pendientes: 0,
-      ingresos: [],
-      top_tardanzas: [],
-    };
-  }
+  // ✅ NUEVO: Resumen del día para dashboard (Inicio)
+  // 🔧 FIX: KPI "pendientes" = SOLO pendientes de días anteriores a la fecha seleccionada
+  @Get("resumen-dia")
+  @Roles("RRHH", "Gerencia")
+  async resumenDia(
+    @Query()
+    q: {
+      fecha?: string; // YYYY-MM-DD
+      usuarioIds?: string; // CSV
+    },
+  ) {
+    const fecha = (q.fecha || "").trim();
+    if (!fecha)
+      throw new BadRequestException("fecha es obligatorio (YYYY-MM-DD)");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+      throw new BadRequestException("fecha inválida. Use YYYY-MM-DD");
+    }
 
-  const ids = raw
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
+    const raw = (q.usuarioIds || "").trim();
+    if (!raw) {
+      return {
+        fecha,
+        total_empleados: 0,
+        marcaron_ingreso: 0,
+        no_marcaron_ingreso: 0,
+        tardanzas: 0,
+        pendientes: 0,
+        ingresos: [],
+        top_tardanzas: [],
+      };
+    }
 
-  if (ids.length === 0) {
-    return {
-      fecha,
-      total_empleados: 0,
-      marcaron_ingreso: 0,
-      no_marcaron_ingreso: 0,
-      tardanzas: 0,
-      pendientes: 0,
-      ingresos: [],
-      top_tardanzas: [],
-    };
-  }
+    const ids = raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
 
-  // 1) Ingresos (primer JORNADA_IN por empleado en el día)
-  const ingresos = await this.ds.query(
-    `
+    if (ids.length === 0) {
+      return {
+        fecha,
+        total_empleados: 0,
+        marcaron_ingreso: 0,
+        no_marcaron_ingreso: 0,
+        tardanzas: 0,
+        pendientes: 0,
+        ingresos: [],
+        top_tardanzas: [],
+      };
+    }
+
+    // 1) Ingresos (primer JORNADA_IN por empleado en el día)
+    const ingresos = await this.ds.query(
+      `
     WITH first_in AS (
       SELECT
         a.usuario_id,
@@ -464,17 +470,19 @@ async resumenDia(
      AND a.fecha_hora = fi.fecha_hora_in
     ORDER BY fi.fecha_hora_in ASC
     `,
-    [ids, fecha],
-  );
+      [ids, fecha],
+    );
 
-  const marcaron_ingreso = ingresos.length;
+    const marcaron_ingreso = ingresos.length;
 
-  // 2) Tardanzas del día
-  const tardanzas = ingresos.filter((r: any) => Number(r?.minutos_tarde || 0) > 0).length;
+    // 2) Tardanzas del día
+    const tardanzas = ingresos.filter(
+      (r: any) => Number(r?.minutos_tarde || 0) > 0,
+    ).length;
 
-  // 3) Pendientes BLOQUEANTES: días anteriores a la fecha seleccionada (tiene IN y no OUT)
-  const pendientesRows = await this.ds.query(
-    `
+    // 3) Pendientes BLOQUEANTES: días anteriores a la fecha seleccionada (tiene IN y no OUT)
+    const pendientesRows = await this.ds.query(
+      `
     WITH dias AS (
       SELECT
         a.usuario_id,
@@ -495,31 +503,33 @@ async resumenDia(
     SELECT usuario_id, fecha_pendiente
     FROM pendientes
     `,
-    [ids, fecha],
-  );
+      [ids, fecha],
+    );
 
-  const pendientes = pendientesRows.length;
+    const pendientes = pendientesRows.length;
 
-  // 4) Totales
-  const total_empleados = ids.length;
-  const no_marcaron_ingreso = Math.max(0, total_empleados - marcaron_ingreso);
+    // 4) Totales
+    const total_empleados = ids.length;
+    const no_marcaron_ingreso = Math.max(0, total_empleados - marcaron_ingreso);
 
-  // 5) Top tardanzas
-  const top_tardanzas = ingresos
-    .filter((r: any) => Number(r?.minutos_tarde || 0) > 0)
-    .sort((a: any, b: any) => Number(b.minutos_tarde || 0) - Number(a.minutos_tarde || 0))
-    .slice(0, 8);
+    // 5) Top tardanzas
+    const top_tardanzas = ingresos
+      .filter((r: any) => Number(r?.minutos_tarde || 0) > 0)
+      .sort(
+        (a: any, b: any) =>
+          Number(b.minutos_tarde || 0) - Number(a.minutos_tarde || 0),
+      )
+      .slice(0, 8);
 
-  return {
-    fecha,
-    total_empleados,
-    marcaron_ingreso,
-    no_marcaron_ingreso,
-    tardanzas,
-    pendientes,
-    ingresos,
-    top_tardanzas,
-  };
-}
-
+    return {
+      fecha,
+      total_empleados,
+      marcaron_ingreso,
+      no_marcaron_ingreso,
+      tardanzas,
+      pendientes,
+      ingresos,
+      top_tardanzas,
+    };
+  }
 }

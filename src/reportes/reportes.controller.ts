@@ -5,16 +5,16 @@ import {
   Get,
   Query,
   Res,
-} from '@nestjs/common';
-import { DataSource } from 'typeorm';
-import { Roles } from '../common/roles.decorator';
-import type { Response } from 'express';
-import * as ExcelJS from 'exceljs';
+} from "@nestjs/common";
+import { DataSource } from "typeorm";
+import { Roles } from "../common/roles.decorator";
+import type { Response } from "express";
+import * as ExcelJS from "exceljs";
 
 // PDF
-import PDFDocument from 'pdfkit';
-import * as path from 'path';
-import * as fs from 'fs';
+import PDFDocument from "pdfkit";
+import * as path from "path";
+import * as fs from "fs";
 
 type ResumenRow = {
   usuario_id: string;
@@ -23,13 +23,15 @@ type ResumenRow = {
   marcas_in: number;
   marcas_out: number;
 
-  // ✅ nuevos (separados)
   tardanzas_jornada_in: number;
   tardanzas_refrigerio_in: number;
   minutos_tarde_jornada_in: number;
   minutos_tarde_refrigerio_in: number;
 
-  // totales
+  // ✅ nuevo: minutos acumulados al salir después del horario
+  minutos_extra_salida: number;
+
+  // totales tardanza
   tardanzas: number;
   minutos_tarde_total: number;
 
@@ -47,20 +49,20 @@ type ResumenRow = {
   ranking?: number;
 };
 
-@Controller('reportes')
+@Controller("reportes")
 export class ReportesController {
   constructor(private ds: DataSource) {}
 
   // ==========================
   // Filtros globales reportes
   // ==========================
-  private readonly DNI_EXCLUIDO = '44823948';
+  private readonly DNI_EXCLUIDO = "44823948";
 
-  private filtroNoRechazado(aliasAsistencia = 'a') {
+  private filtroNoRechazado(aliasAsistencia = "a") {
     return `COALESCE(${aliasAsistencia}.estado_validacion,'') <> 'rechazado'`;
   }
 
-  private filtroNoDniExcluido(aliasUsuario = 'u') {
+  private filtroNoDniExcluido(aliasUsuario = "u") {
     return `COALESCE(${aliasUsuario}.numero_documento,'') <> '${this.DNI_EXCLUIDO}'`;
   }
 
@@ -68,19 +70,17 @@ export class ReportesController {
   // Helpers fechas / filtros
   // ==========================
   private pad2(n: number) {
-    return String(n).padStart(2, '0');
+    return String(n).padStart(2, "0");
   }
 
-  // YYYY-MM-DD en HORA LOCAL del servidor
   private toDateOnlyLocal(d: Date): string {
     return `${d.getFullYear()}-${this.pad2(d.getMonth() + 1)}-${this.pad2(
       d.getDate(),
     )}`;
   }
 
-  // dd/MM/yyyy para mostrar (Perú)
   private formatDatePEFromDateOnly(yyyyMmDd: string): string {
-    const [y, m, d] = yyyyMmDd.split('-');
+    const [y, m, d] = yyyyMmDd.split("-");
     return `${d}/${m}/${y}`;
   }
 
@@ -95,19 +95,19 @@ export class ReportesController {
     let start: Date, end: Date;
 
     const toDate = (s: string) =>
-      new Date(s + (s.length === 10 ? 'T00:00:00' : ''));
+      new Date(s + (s.length === 10 ? "T00:00:00" : ""));
 
     if (desde && hasta) {
       start = toDate(desde);
       end = toDate(hasta);
       if (isNaN(+start) || isNaN(+end) || start > end) {
-        throw new BadRequestException('Rango inválido');
+        throw new BadRequestException("Rango inválido");
       }
       end = new Date(end.getTime() + 24 * 60 * 60 * 1000 - 1);
     } else {
       const base = ref ? toDate(ref) : new Date();
       if (isNaN(+base)) {
-        throw new BadRequestException('Fecha de referencia inválida');
+        throw new BadRequestException("Fecha de referencia inválida");
       }
 
       const y = base.getFullYear();
@@ -117,8 +117,8 @@ export class ReportesController {
         return d;
       };
 
-      switch ((period || 'mes').toLowerCase()) {
-        case 'semana': {
+      switch ((period || "mes").toLowerCase()) {
+        case "semana": {
           const day = base.getDay();
           const diff = day === 0 ? -6 : 1 - day;
           start = set00(new Date(base));
@@ -128,7 +128,7 @@ export class ReportesController {
           end.setHours(23, 59, 59, 999);
           break;
         }
-        case 'quincena': {
+        case "quincena": {
           const d = base.getDate();
           if (d <= 15) {
             start = set00(new Date(y, m, 1));
@@ -141,34 +141,34 @@ export class ReportesController {
           }
           break;
         }
-        case 'bimestre': {
+        case "bimestre": {
           const b = Math.floor(m / 2) * 2;
           start = set00(new Date(y, b, 1));
           end = set00(new Date(y, b + 2, 0));
           end.setHours(23, 59, 59, 999);
           break;
         }
-        case 'trimestre': {
+        case "trimestre": {
           const q = Math.floor(m / 3) * 3;
           start = set00(new Date(y, q, 1));
           end = set00(new Date(y, q + 3, 0));
           end.setHours(23, 59, 59, 999);
           break;
         }
-        case 'semestre': {
+        case "semestre": {
           const s = m < 6 ? 0 : 6;
           start = set00(new Date(y, s, 1));
           end = set00(new Date(y, s + 6, 0));
           end.setHours(23, 59, 59, 999);
           break;
         }
-        case 'anual': {
+        case "anual": {
           start = set00(new Date(y, 0, 1));
           end = set00(new Date(y, 12, 0));
           end.setHours(23, 59, 59, 999);
           break;
         }
-        case 'mes':
+        case "mes":
         default: {
           start = set00(new Date(y, m, 1));
           end = set00(new Date(y, m + 1, 0));
@@ -191,7 +191,7 @@ export class ReportesController {
     const m = Math.max(0, Number(minutos) || 0);
     const hh = Math.floor(m / 60);
     const mm = m % 60;
-    return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+    return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
   }
 
   // ==========================
@@ -208,12 +208,12 @@ export class ReportesController {
     const { startDate, endDate } = this.resolverRango(params);
     const { usuarioId, sedeId } = params;
 
-    // -------- resumen marcas/tardanzas (excluye rechazados y DNI)
+    // -------- resumen marcas/tardanzas + minutos salida
     const resumenParams: any[] = [startDate, endDate];
     const resumenConds: string[] = [
       `a.fecha_hora >= $1::date AND a.fecha_hora < ($2::date + interval '1 day')`,
-      this.filtroNoRechazado('a'),
-      this.filtroNoDniExcluido('u'),
+      this.filtroNoRechazado("a"),
+      this.filtroNoDniExcluido("u"),
     ];
 
     let p = 3;
@@ -228,38 +228,96 @@ export class ReportesController {
       p++;
     }
 
-    const where = resumenConds.join(' AND ');
+    const where = resumenConds.join(" AND ");
 
     const resumenRows = await this.ds.query(
-      `SELECT
-          u.id AS usuario_id,
-          (u.nombre || ' ' || COALESCE(u.apellido_paterno,'') || ' ' || COALESCE(u.apellido_materno,'')) AS usuario,
-
-          COUNT(*) FILTER (WHERE a.tipo = 'IN')  AS marcas_in,
-          COUNT(*) FILTER (WHERE a.tipo = 'OUT') AS marcas_out,
-
-          COUNT(*) FILTER (WHERE a.minutos_tarde > 0 AND a.evento = 'JORNADA_IN')    AS tardanzas_jornada_in,
-          COUNT(*) FILTER (WHERE a.minutos_tarde > 0 AND a.evento = 'REFRIGERIO_IN') AS tardanzas_refrigerio_in,
-
-          COALESCE(SUM(a.minutos_tarde) FILTER (WHERE a.evento = 'JORNADA_IN'), 0)    AS minutos_tarde_jornada_in,
-          COALESCE(SUM(a.minutos_tarde) FILTER (WHERE a.evento = 'REFRIGERIO_IN'), 0) AS minutos_tarde_refrigerio_in,
-
-          COUNT(*) FILTER (WHERE a.minutos_tarde > 0) AS tardanzas,
-          COALESCE(SUM(a.minutos_tarde), 0) AS minutos_tarde_total,
-
-          MIN(a.fecha_hora) AS primer_ingreso,
-          MAX(a.fecha_hora) AS ultima_salida
+      `
+      WITH asist_base AS (
+        SELECT
+          a.id,
+          a.usuario_id,
+          a.fecha_hora,
+          a.tipo,
+          a.evento,
+          COALESCE(a.minutos_tarde, 0) AS minutos_tarde
         FROM asistencias a
         JOIN usuarios u ON u.id = a.usuario_id
-       WHERE ${where}
-       GROUP BY u.id, u.nombre, u.apellido_paterno, u.apellido_materno`,
+        WHERE ${where}
+      ),
+      asist_con_horario AS (
+        SELECT
+          ab.*,
+          h.hora_fin,
+          h.hora_fin_2,
+          CASE
+            WHEN h.hora_fin_2 IS NOT NULL THEN h.hora_fin_2
+            ELSE h.hora_fin
+          END AS hora_salida_programada
+        FROM asist_base ab
+        LEFT JOIN LATERAL (
+          SELECT
+            uh.hora_fin,
+            uh.hora_fin_2,
+            uh.fecha_inicio,
+            uh.creado_en
+          FROM usuario_horarios uh
+          WHERE uh.usuario_id = ab.usuario_id
+            AND uh.dia_semana = EXTRACT(ISODOW FROM ab.fecha_hora)::int
+            AND uh.es_descanso = FALSE
+            AND uh.fecha_inicio <= ab.fecha_hora::date
+            AND COALESCE(uh.fecha_fin, '9999-12-31'::date) >= ab.fecha_hora::date
+          ORDER BY uh.fecha_inicio DESC, uh.creado_en DESC
+          LIMIT 1
+        ) h ON TRUE
+      )
+      SELECT
+        u.id AS usuario_id,
+        (u.nombre || ' ' || COALESCE(u.apellido_paterno,'') || ' ' || COALESCE(u.apellido_materno,'')) AS usuario,
+
+        COUNT(*) FILTER (WHERE a.tipo = 'IN')  AS marcas_in,
+        COUNT(*) FILTER (WHERE a.tipo = 'OUT') AS marcas_out,
+
+        COUNT(*) FILTER (WHERE a.minutos_tarde > 0 AND a.evento = 'JORNADA_IN')    AS tardanzas_jornada_in,
+        COUNT(*) FILTER (WHERE a.minutos_tarde > 0 AND a.evento = 'REFRIGERIO_IN') AS tardanzas_refrigerio_in,
+
+        COALESCE(SUM(a.minutos_tarde) FILTER (WHERE a.evento = 'JORNADA_IN'), 0)    AS minutos_tarde_jornada_in,
+        COALESCE(SUM(a.minutos_tarde) FILTER (WHERE a.evento = 'REFRIGERIO_IN'), 0) AS minutos_tarde_refrigerio_in,
+
+        COALESCE(SUM(
+          CASE
+            WHEN a.evento = 'JORNADA_OUT'
+             AND a.hora_salida_programada IS NOT NULL
+            THEN GREATEST(
+              (
+                EXTRACT(HOUR FROM a.fecha_hora)::int * 60
+                + EXTRACT(MINUTE FROM a.fecha_hora)::int
+              )
+              -
+              (
+                EXTRACT(HOUR FROM a.hora_salida_programada)::int * 60
+                + EXTRACT(MINUTE FROM a.hora_salida_programada)::int
+              ),
+              0
+            )
+            ELSE 0
+          END
+        ), 0) AS minutos_extra_salida,
+
+        COUNT(*) FILTER (WHERE a.minutos_tarde > 0) AS tardanzas,
+        COALESCE(SUM(a.minutos_tarde), 0) AS minutos_tarde_total,
+
+        MIN(a.fecha_hora) AS primer_ingreso,
+        MAX(a.fecha_hora) AS ultima_salida
+      FROM asist_con_horario a
+      JOIN usuarios u ON u.id = a.usuario_id
+      GROUP BY u.id, u.nombre, u.apellido_paterno, u.apellido_materno
+      `,
       resumenParams,
     );
 
     // -------- ausencias (calendario) excluye DNI, y asistencia del día no cuenta rechazados
     const ausParams: any[] = [startDate, endDate];
-    let usuariosFiltro =
-      `WHERE u.activo = TRUE AND COALESCE(u.numero_documento,'') <> '${this.DNI_EXCLUIDO}'`;
+    let usuariosFiltro = `WHERE u.activo = TRUE AND COALESCE(u.numero_documento,'') <> '${this.DNI_EXCLUIDO}'`;
 
     let aidx = 3;
     if (usuarioId) {
@@ -279,14 +337,16 @@ export class ReportesController {
         SELECT generate_series($1::date, $2::date, interval '1 day')::date AS fecha
       ),
       usuarios_filtrados AS (
-        SELECT u.id, (u.nombre || ' ' || COALESCE(u.apellido_paterno,'') || ' ' || COALESCE(u.apellido_materno,'')) AS nombre
-          FROM usuarios u
-         ${usuariosFiltro}
+        SELECT
+          u.id,
+          (u.nombre || ' ' || COALESCE(u.apellido_paterno,'') || ' ' || COALESCE(u.apellido_materno,'')) AS nombre
+        FROM usuarios u
+        ${usuariosFiltro}
       ),
       calendario AS (
         SELECT uf.id AS usuario_id, uf.nombre, f.fecha
-          FROM usuarios_filtrados uf
-          CROSS JOIN fechas f
+        FROM usuarios_filtrados uf
+        CROSS JOIN fechas f
       ),
       horario_vigente AS (
         SELECT
@@ -330,7 +390,7 @@ export class ReportesController {
       ),
       exc AS (
         SELECT usuario_id, fecha, es_laborable
-          FROM usuario_excepciones
+        FROM usuario_excepciones
       ),
       asis_dia AS (
         SELECT
@@ -339,10 +399,10 @@ export class ReportesController {
           COUNT(*) AS marcas
         FROM asistencias a
         JOIN usuarios_filtrados uf ON uf.id = a.usuario_id
-       WHERE a.fecha_hora >= $1::date
-         AND a.fecha_hora < ($2::date + interval '1 day')
-         AND COALESCE(a.estado_validacion,'') <> 'rechazado'
-       GROUP BY a.usuario_id, a.fecha_hora::date
+        WHERE a.fecha_hora >= $1::date
+          AND a.fecha_hora < ($2::date + interval '1 day')
+          AND COALESCE(a.estado_validacion,'') <> 'rechazado'
+        GROUP BY a.usuario_id, a.fecha_hora::date
       ),
       cal_final AS (
         SELECT
@@ -357,8 +417,8 @@ export class ReportesController {
             AND c.fecha >= c.horario_vigente_desde
             AND EXISTS (
               SELECT 1
-                FROM public.feriados f
-               WHERE f.fecha = c.fecha
+              FROM public.feriados f
+              WHERE f.fecha = c.fecha
             )
           ) AS es_feriado,
           e.es_laborable AS exc_es_laborable,
@@ -432,6 +492,7 @@ export class ReportesController {
         tardanzas_refrigerio_in: Number(r.tardanzas_refrigerio_in) || 0,
         minutos_tarde_jornada_in: Number(r.minutos_tarde_jornada_in) || 0,
         minutos_tarde_refrigerio_in: Number(r.minutos_tarde_refrigerio_in) || 0,
+        minutos_extra_salida: Number(r.minutos_extra_salida) || 0,
 
         tardanzas: Number(r.tardanzas) || 0,
         minutos_tarde_total: Number(r.minutos_tarde_total) || 0,
@@ -463,6 +524,7 @@ export class ReportesController {
           tardanzas_refrigerio_in: 0,
           minutos_tarde_jornada_in: 0,
           minutos_tarde_refrigerio_in: 0,
+          minutos_extra_salida: 0,
 
           tardanzas: 0,
           minutos_tarde_total: 0,
@@ -494,12 +556,10 @@ export class ReportesController {
 
     data.sort((a, b) => {
       if (
-        (b.ausencias_injustificadas || 0) !==
-        (a.ausencias_injustificadas || 0)
+        (b.ausencias_injustificadas || 0) !== (a.ausencias_injustificadas || 0)
       ) {
         return (
-          (b.ausencias_injustificadas || 0) -
-          (a.ausencias_injustificadas || 0)
+          (b.ausencias_injustificadas || 0) - (a.ausencias_injustificadas || 0)
         );
       }
       if ((b.minutos_tarde_total || 0) !== (a.minutos_tarde_total || 0)) {
@@ -520,15 +580,15 @@ export class ReportesController {
   // ==========================
   // JSON
   // ==========================
-  @Roles('Gerencia', 'RRHH')
-  @Get('resumen')
+  @Roles("Gerencia", "RRHH")
+  @Get("resumen")
   async resumen(
-    @Query('period') period?: string,
-    @Query('ref') ref?: string,
-    @Query('desde') desde?: string,
-    @Query('hasta') hasta?: string,
-    @Query('usuarioId') usuarioId?: string,
-    @Query('sedeId') sedeId?: string,
+    @Query("period") period?: string,
+    @Query("ref") ref?: string,
+    @Query("desde") desde?: string,
+    @Query("hasta") hasta?: string,
+    @Query("usuarioId") usuarioId?: string,
+    @Query("sedeId") sedeId?: string,
   ) {
     return this.obtenerResumenData({
       period,
@@ -541,18 +601,18 @@ export class ReportesController {
   }
 
   // ==========================
-  // Excel (Resumen) - ✅ con separados
+  // Excel (Resumen)
   // ==========================
-  @Roles('Gerencia', 'RRHH')
-  @Get('resumen-excel')
+  @Roles("Gerencia", "RRHH")
+  @Get("resumen-excel")
   async resumenExcel(
     @Res() res: Response,
-    @Query('period') period?: string,
-    @Query('ref') ref?: string,
-    @Query('desde') desde?: string,
-    @Query('hasta') hasta?: string,
-    @Query('usuarioId') usuarioId?: string,
-    @Query('sedeId') sedeId?: string,
+    @Query("period") period?: string,
+    @Query("ref") ref?: string,
+    @Query("desde") desde?: string,
+    @Query("hasta") hasta?: string,
+    @Query("usuarioId") usuarioId?: string,
+    @Query("sedeId") sedeId?: string,
   ) {
     const result = await this.obtenerResumenData({
       period,
@@ -564,38 +624,47 @@ export class ReportesController {
     });
 
     const wb = new ExcelJS.Workbook();
-    const ws = wb.addWorksheet('Resumen');
+    const ws = wb.addWorksheet("Resumen");
 
     ws.columns = [
-      { header: 'Ranking', key: 'ranking', width: 10 },
-      { header: 'Usuario', key: 'usuario', width: 34 },
+      { header: "Ranking", key: "ranking", width: 10 },
+      { header: "Usuario", key: "usuario", width: 34 },
 
-      { header: 'Marcas IN', key: 'marcas_in', width: 11 },
-      { header: 'Marcas OUT', key: 'marcas_out', width: 12 },
+      { header: "Marcas IN", key: "marcas_in", width: 11 },
+      { header: "Marcas OUT", key: "marcas_out", width: 12 },
 
-      // ✅ separados
-      { header: 'Tard. Ingreso', key: 'tard_jornada', width: 14 },
-      { header: 'Min. Ingreso', key: 'min_jornada', width: 12 },
-      { header: 'HH:MM Ingreso', key: 'hhmm_jornada', width: 14 },
+      { header: "Tard. Ingreso", key: "tard_jornada", width: 14 },
+      { header: "Min. Ingreso", key: "min_jornada", width: 12 },
+      { header: "HH:MM Ingreso", key: "hhmm_jornada", width: 14 },
 
-      { header: 'Tard. Refrig.', key: 'tard_ref', width: 14 },
-      { header: 'Min. Refrig.', key: 'min_ref', width: 12 },
-      { header: 'HH:MM Refrig.', key: 'hhmm_ref', width: 14 },
+      { header: "Tard. Refrig.", key: "tard_ref", width: 14 },
+      { header: "Min. Refrig.", key: "min_ref", width: 12 },
+      { header: "HH:MM Refrig.", key: "hhmm_ref", width: 14 },
 
-      // totales
-      { header: 'Tardanzas Total', key: 'tardanzas', width: 14 },
-      { header: 'Minutos Total', key: 'minutos_tarde_total', width: 12 },
-      { header: 'HH:MM Total', key: 'hhmm_total', width: 12 },
+      { header: "Min. Salida", key: "min_salida", width: 12 },
+      { header: "HH:MM Salida", key: "hhmm_salida", width: 14 },
 
-      { header: 'Días laborables', key: 'dias_laborables', width: 14 },
-      { header: 'Días feriados', key: 'dias_feriados', width: 12 },
-      { header: 'Días con asistencia', key: 'dias_con_asistencia', width: 16 },
-      { header: 'Ausencias just.', key: 'ausencias_justificadas', width: 14 },
-      { header: 'Ausencias injust.', key: 'ausencias_injustificadas', width: 16 },
+      { header: "Tardanzas Total", key: "tardanzas", width: 14 },
+      { header: "Minutos Total", key: "minutos_tarde_total", width: 12 },
+      { header: "HH:MM Total", key: "hhmm_total", width: 12 },
 
-      { header: 'Horario vigente desde', key: 'horario_vigente_desde', width: 18 },
-      { header: 'Primer ingreso', key: 'primer_ingreso', width: 22 },
-      { header: 'Última salida', key: 'ultima_salida', width: 22 },
+      { header: "Días laborables", key: "dias_laborables", width: 14 },
+      { header: "Días feriados", key: "dias_feriados", width: 12 },
+      { header: "Días con asistencia", key: "dias_con_asistencia", width: 16 },
+      { header: "Ausencias just.", key: "ausencias_justificadas", width: 14 },
+      {
+        header: "Ausencias injust.",
+        key: "ausencias_injustificadas",
+        width: 16,
+      },
+
+      {
+        header: "Horario vigente desde",
+        key: "horario_vigente_desde",
+        width: 18,
+      },
+      { header: "Primer ingreso", key: "primer_ingreso", width: 22 },
+      { header: "Última salida", key: "ultima_salida", width: 22 },
     ];
 
     for (const r of result.data as ResumenRow[]) {
@@ -613,6 +682,9 @@ export class ReportesController {
         tard_ref: r.tardanzas_refrigerio_in,
         min_ref: r.minutos_tarde_refrigerio_in,
         hhmm_ref: this.minutosToHHMM(r.minutos_tarde_refrigerio_in),
+
+        min_salida: r.minutos_extra_salida,
+        hhmm_salida: this.minutosToHHMM(r.minutos_extra_salida),
 
         tardanzas: r.tardanzas,
         minutos_tarde_total: r.minutos_tarde_total,
@@ -632,16 +704,177 @@ export class ReportesController {
 
     const header = ws.getRow(1);
     header.font = { bold: true };
-    header.alignment = { vertical: 'middle', horizontal: 'center' };
-    ws.views = [{ state: 'frozen', ySplit: 1 }];
+    header.alignment = { vertical: "middle", horizontal: "center" };
+    ws.views = [{ state: "frozen", ySplit: 1 }];
 
     res.setHeader(
-      'Content-Type',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     );
     res.setHeader(
-      'Content-Disposition',
+      "Content-Disposition",
       `attachment; filename="reporte_asistencias_resumen.xlsx"`,
+    );
+
+    await wb.xlsx.write(res);
+    res.end();
+  }
+
+  // ==========================
+  // RESUMEN DÍA - EXCEL
+  // ==========================
+  @Roles("Gerencia", "RRHH")
+  @Get("resumen-dia-excel")
+  async resumenDiaExcel(
+    @Res() res: Response,
+    @Query("desde") desde?: string,
+    @Query("hasta") hasta?: string,
+    @Query("usuarioId") usuarioId?: string,
+    @Query("sedeId") sedeId?: string,
+  ) {
+    if (!desde || !hasta) {
+      throw new BadRequestException("Debe indicar desde y hasta");
+    }
+
+    const params: any[] = [desde, hasta];
+    const conds: string[] = [
+      `a.fecha_hora >= $1::date`,
+      `a.fecha_hora < ($2::date + interval '1 day')`,
+      this.filtroNoRechazado("a"),
+      this.filtroNoDniExcluido("u"),
+    ];
+
+    let p = 3;
+    if (usuarioId) {
+      params.push(usuarioId);
+      conds.push(`u.id = $${p}::uuid`);
+      p++;
+    }
+    if (sedeId) {
+      params.push(sedeId);
+      conds.push(`u.sede_id = $${p}::uuid`);
+      p++;
+    }
+
+    const where = conds.join(" AND ");
+
+    const rows = await this.ds.query(
+      `
+      WITH base AS (
+        SELECT
+          a.usuario_id,
+          a.fecha_hora::date AS fecha,
+          a.fecha_hora,
+          a.evento,
+          COALESCE(a.minutos_tarde, 0) AS minutos_tarde,
+          (u.nombre || ' ' || COALESCE(u.apellido_paterno,'') || ' ' || COALESCE(u.apellido_materno,'')) AS usuario,
+          COALESCE(s.nombre, '') AS sede,
+          COALESCE(ar.nombre, '') AS area
+        FROM asistencias a
+        JOIN usuarios u ON u.id = a.usuario_id
+        LEFT JOIN sedes s ON s.id = u.sede_id
+        LEFT JOIN areas ar ON ar.id = u.area_id
+        WHERE ${where}
+      ),
+      salida_calc AS (
+        SELECT
+          b.usuario_id,
+          b.fecha,
+          COALESCE(SUM(
+            CASE
+              WHEN b.evento = 'JORNADA_OUT' AND h.hora_salida_programada IS NOT NULL
+              THEN GREATEST(
+                (
+                  EXTRACT(HOUR FROM b.fecha_hora)::int * 60
+                  + EXTRACT(MINUTE FROM b.fecha_hora)::int
+                )
+                -
+                (
+                  EXTRACT(HOUR FROM h.hora_salida_programada)::int * 60
+                  + EXTRACT(MINUTE FROM h.hora_salida_programada)::int
+                ),
+                0
+              )
+              ELSE 0
+            END
+          ), 0) AS minutos_extra_salida
+        FROM base b
+        LEFT JOIN LATERAL (
+          SELECT
+            CASE
+              WHEN uh.hora_fin_2 IS NOT NULL THEN uh.hora_fin_2
+              ELSE uh.hora_fin
+            END AS hora_salida_programada
+          FROM usuario_horarios uh
+          WHERE uh.usuario_id = b.usuario_id
+            AND uh.dia_semana = EXTRACT(ISODOW FROM b.fecha)::int
+            AND uh.es_descanso = FALSE
+            AND uh.fecha_inicio <= b.fecha
+            AND COALESCE(uh.fecha_fin, '9999-12-31'::date) >= b.fecha
+          ORDER BY uh.fecha_inicio DESC, uh.creado_en DESC
+          LIMIT 1
+        ) h ON TRUE
+        GROUP BY b.usuario_id, b.fecha
+      )
+      SELECT
+        b.fecha,
+        b.usuario,
+        b.sede,
+        b.area,
+        MIN(TO_CHAR(b.fecha_hora, 'HH24:MI')) FILTER (WHERE b.evento = 'JORNADA_IN') AS jornada_in,
+        MIN(TO_CHAR(b.fecha_hora, 'HH24:MI')) FILTER (WHERE b.evento = 'REFRIGERIO_OUT') AS refrigerio_out,
+        MIN(TO_CHAR(b.fecha_hora, 'HH24:MI')) FILTER (WHERE b.evento = 'REFRIGERIO_IN') AS refrigerio_in,
+        MAX(TO_CHAR(b.fecha_hora, 'HH24:MI')) FILTER (WHERE b.evento = 'JORNADA_OUT') AS jornada_out,
+        COALESCE(SUM(b.minutos_tarde) FILTER (WHERE b.evento = 'JORNADA_IN'), 0) AS min_ingreso,
+        COALESCE(SUM(b.minutos_tarde) FILTER (WHERE b.evento = 'REFRIGERIO_IN'), 0) AS min_refrigerio,
+        COALESCE(sc.minutos_extra_salida, 0) AS min_salida
+      FROM base b
+      LEFT JOIN salida_calc sc
+        ON sc.usuario_id = b.usuario_id
+       AND sc.fecha = b.fecha
+      GROUP BY b.fecha, b.usuario, b.sede, b.area, sc.minutos_extra_salida
+      ORDER BY b.fecha, b.usuario
+      `,
+      params,
+    );
+
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Resumen Día");
+
+    ws.columns = [
+      { header: "Fecha", key: "fecha", width: 12 },
+      { header: "Usuario", key: "usuario", width: 32 },
+      { header: "Sede", key: "sede", width: 18 },
+      { header: "Área", key: "area", width: 18 },
+      { header: "Jor. In", key: "jornada_in", width: 10 },
+      { header: "Ref. Out", key: "refrigerio_out", width: 10 },
+      { header: "Ref. In", key: "refrigerio_in", width: 10 },
+      { header: "Jor. Out", key: "jornada_out", width: 10 },
+      { header: "Min. Ing.", key: "min_ingreso", width: 10 },
+      { header: "Min. Ref.", key: "min_refrigerio", width: 10 },
+      { header: "Min. Sal.", key: "min_salida", width: 10 },
+      { header: "HH:MM Sal.", key: "hhmm_salida", width: 12 },
+    ];
+
+    rows.forEach((r: any) => {
+      ws.addRow({
+        ...r,
+        hhmm_salida: this.minutosToHHMM(Number(r.min_salida) || 0),
+      });
+    });
+
+    const header = ws.getRow(1);
+    header.font = { bold: true };
+    header.alignment = { vertical: "middle", horizontal: "center" };
+    ws.views = [{ state: "frozen", ySplit: 1 }];
+
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
+    res.setHeader(
+      "Content-Disposition",
+      'attachment; filename="reporte_asistencias_resumen_dia.xlsx"',
     );
 
     await wb.xlsx.write(res);
@@ -651,16 +884,16 @@ export class ReportesController {
   // ==========================
   // PDF (Resumen)
   // ==========================
-  @Roles('Gerencia', 'RRHH')
-  @Get('resumen-pdf')
+  @Roles("Gerencia", "RRHH")
+  @Get("resumen-pdf")
   async resumenPdf(
     @Res() res: Response,
-    @Query('period') period?: string,
-    @Query('ref') ref?: string,
-    @Query('desde') desde?: string,
-    @Query('hasta') hasta?: string,
-    @Query('usuarioId') usuarioId?: string,
-    @Query('sedeId') sedeId?: string,
+    @Query("period") period?: string,
+    @Query("ref") ref?: string,
+    @Query("desde") desde?: string,
+    @Query("hasta") hasta?: string,
+    @Query("usuarioId") usuarioId?: string,
+    @Query("sedeId") sedeId?: string,
   ) {
     const { startDate, endDate } = this.resolverRango({
       period,
@@ -678,64 +911,63 @@ export class ReportesController {
       sedeId,
     });
 
-    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
-      'Content-Disposition',
+      "Content-Disposition",
       `attachment; filename="reporte_asistencias_resumen.pdf"`,
     );
 
-    const doc = new PDFDocument({ margin: 36, size: 'A4' });
+    const doc = new PDFDocument({ margin: 36, size: "A4" });
     doc.pipe(res);
 
-    const logoPath = path.join(process.cwd(), 'public', 'logo_negro.png');
+    const logoPath = path.join(process.cwd(), "public", "logo_negro.png");
     if (fs.existsSync(logoPath)) {
       doc.image(logoPath, doc.page.margins.left, 18, { width: 110 });
     }
 
     doc
-      .font('Helvetica-Bold')
+      .font("Helvetica-Bold")
       .fontSize(16)
-      .text('Reporte de Asistencias - Resumen', 0, 30, { align: 'center' });
+      .text("Reporte de Asistencias - Resumen", 0, 30, { align: "center" });
 
     doc.moveDown(1.7);
-
-    doc.font('Helvetica').fontSize(10);
+    doc.font("Helvetica").fontSize(10);
 
     const periodoTxt = `Periodo: ${this.formatDatePEFromDateOnly(
       startDate,
     )} a ${this.formatDatePEFromDateOnly(endDate)}`;
 
     const filtrosTxt = `Filtros: usuarioId=${
-      result.filtros.usuarioId ?? '-'
-    } | sedeId=${result.filtros.sedeId ?? '-'}`;
+      result.filtros.usuarioId ?? "-"
+    } | sedeId=${result.filtros.sedeId ?? "-"}`;
 
     doc.text(periodoTxt, doc.page.margins.left, doc.y);
     doc.text(filtrosTxt, doc.page.margins.left, doc.y + 2);
 
     doc.moveDown(1.0);
 
-    const rows: ResumenRow[] = result.data;
+    const rows: ResumenRow[] = result.data as ResumenRow[];
 
     const col = {
       rk: 26,
-      usuario: 220,
-      lab: 42,
-      feri: 42,
-      asis: 42,
-      ausi: 50,
-      tard: 42,
-      minh: 52,
+      usuario: 210,
+      lab: 40,
+      asis: 40,
+      ausi: 46,
+      tard: 46,
+      hhtard: 58,
+      hhsal: 58,
     };
 
     const tableWidth =
       col.rk +
       col.usuario +
       col.lab +
-      col.feri +
       col.asis +
       col.ausi +
       col.tard +
-      col.minh;
+      col.hhtard +
+      col.hhsal;
 
     const contentWidth =
       doc.page.width - doc.page.margins.left - doc.page.margins.right;
@@ -746,72 +978,86 @@ export class ReportesController {
     let y = doc.y;
 
     const drawHeader = () => {
-      doc.font('Helvetica-Bold').fontSize(9);
+      doc.font("Helvetica-Bold").fontSize(9);
 
-      doc.text('Rk', startX, y, { width: col.rk, align: 'center' });
-      doc.text('Usuario', startX + col.rk, y, {
+      doc.text("Rk", startX, y, { width: col.rk, align: "center" });
+      doc.text("Usuario", startX + col.rk, y, {
         width: col.usuario,
-        align: 'left',
+        align: "left",
       });
 
       let x = startX + col.rk + col.usuario;
-      doc.text('Lab.', x, y, { width: col.lab, align: 'center' });
+      doc.text("Lab.", x, y, { width: col.lab, align: "center" });
       x += col.lab;
-      doc.text('Feri.', x, y, { width: col.feri, align: 'center' });
-      x += col.feri;
-      doc.text('Asis.', x, y, { width: col.asis, align: 'center' });
+      doc.text("Asis.", x, y, { width: col.asis, align: "center" });
       x += col.asis;
-      doc.text('Aus.I', x, y, { width: col.ausi, align: 'center' });
+      doc.text("Aus.I", x, y, { width: col.ausi, align: "center" });
       x += col.ausi;
-      doc.text('Tard.', x, y, { width: col.tard, align: 'center' });
+      doc.text("Tard.T", x, y, { width: col.tard, align: "center" });
       x += col.tard;
-      doc.text('Min.HH', x, y, { width: col.minh, align: 'center' });
+      doc.text("HH:Tard", x, y, { width: col.hhtard, align: "center" });
+      x += col.hhtard;
+      doc.text("HH:Sal", x, y, { width: col.hhsal, align: "center" });
 
-      doc.moveTo(startX, y + 12).lineTo(startX + tableWidth, y + 12).stroke();
+      doc
+        .moveTo(startX, y + 12)
+        .lineTo(startX + tableWidth, y + 12)
+        .stroke();
 
       y += 18;
-      doc.font('Helvetica').fontSize(9);
+      doc.font("Helvetica").fontSize(9).fillColor("#111");
     };
 
     const drawRow = (r: ResumenRow) => {
-      doc.text(String(r.ranking ?? ''), startX, y, {
+      doc.fillColor("#111");
+
+      doc.text(String(r.ranking ?? ""), startX, y, {
         width: col.rk,
-        align: 'center',
+        align: "center",
       });
       doc.text(r.usuario, startX + col.rk, y, {
         width: col.usuario,
-        align: 'left',
+        align: "left",
       });
 
       let x = startX + col.rk + col.usuario;
       doc.text(String(r.dias_laborables ?? 0), x, y, {
         width: col.lab,
-        align: 'center',
+        align: "center",
       });
       x += col.lab;
-      doc.text(String(r.dias_feriados ?? 0), x, y, {
-        width: col.feri,
-        align: 'center',
-      });
-      x += col.feri;
       doc.text(String(r.dias_con_asistencia ?? 0), x, y, {
         width: col.asis,
-        align: 'center',
+        align: "center",
       });
       x += col.asis;
       doc.text(String(r.ausencias_injustificadas ?? 0), x, y, {
         width: col.ausi,
-        align: 'center',
+        align: "center",
       });
       x += col.ausi;
+
+      if ((r.tardanzas ?? 0) === 0) doc.fillColor("#16a34a");
+      else if ((r.tardanzas ?? 0) <= 2) doc.fillColor("#d97706");
+      else doc.fillColor("#dc2626");
+
       doc.text(String(r.tardanzas ?? 0), x, y, {
         width: col.tard,
-        align: 'center',
+        align: "center",
       });
+
+      doc.fillColor("#111");
       x += col.tard;
+
       doc.text(this.minutosToHHMM(r.minutos_tarde_total ?? 0), x, y, {
-        width: col.minh,
-        align: 'center',
+        width: col.hhtard,
+        align: "center",
+      });
+      x += col.hhtard;
+
+      doc.text(this.minutosToHHMM(r.minutos_extra_salida ?? 0), x, y, {
+        width: col.hhsal,
+        align: "center",
       });
 
       y += 14;
@@ -832,31 +1078,31 @@ export class ReportesController {
   }
 
   // ==========================
-  // DETALLE - EXCEL (ACTUALIZADO)
+  // DETALLE - EXCEL
   // ==========================
-  @Roles('Gerencia', 'RRHH')
-  @Get('detalle-excel')
+  @Roles("Gerencia", "RRHH")
+  @Get("detalle-excel")
   async detalleExcel(
     @Res() res: Response,
-    @Query('desde') desde?: string,
-    @Query('hasta') hasta?: string,
-    @Query('usuarioId') usuarioId?: string,
-    @Query('sedeId') sedeId?: string,
+    @Query("desde") desde?: string,
+    @Query("hasta") hasta?: string,
+    @Query("usuarioId") usuarioId?: string,
+    @Query("sedeId") sedeId?: string,
   ) {
     if (!desde || !hasta) {
-      throw new BadRequestException('Debe indicar desde y hasta');
+      throw new BadRequestException("Debe indicar desde y hasta");
     }
 
     if (!usuarioId && !sedeId) {
-      const d1 = new Date(desde + 'T00:00:00');
-      const d2 = new Date(hasta + 'T00:00:00');
+      const d1 = new Date(desde + "T00:00:00");
+      const d2 = new Date(hasta + "T00:00:00");
       const diffDays = Math.floor((+d2 - +d1) / (1000 * 60 * 60 * 24)) + 1;
       if (!isFinite(diffDays) || diffDays <= 0) {
-        throw new BadRequestException('Rango inválido');
+        throw new BadRequestException("Rango inválido");
       }
       if (diffDays > 31) {
         throw new BadRequestException(
-          'Para descargar sin filtros (usuario/sede) el rango máximo permitido es 31 días.',
+          "Para descargar sin filtros (usuario/sede) el rango máximo permitido es 31 días.",
         );
       }
     }
@@ -865,8 +1111,8 @@ export class ReportesController {
     const conds: string[] = [
       `a.fecha_hora >= $1::date`,
       `a.fecha_hora <  ($2::date + interval '1 day')`,
-      this.filtroNoRechazado('a'),
-      this.filtroNoDniExcluido('u'),
+      this.filtroNoRechazado("a"),
+      this.filtroNoDniExcluido("u"),
     ];
 
     let p = 3;
@@ -881,7 +1127,7 @@ export class ReportesController {
       p++;
     }
 
-    const where = conds.join(' AND ');
+    const where = conds.join(" AND ");
 
     const rows = await this.ds.query(
       `
@@ -929,35 +1175,35 @@ export class ReportesController {
     );
 
     const wb = new ExcelJS.Workbook();
-    const ws = wb.addWorksheet('Detalle Asistencias');
+    const ws = wb.addWorksheet("Detalle Asistencias");
 
     ws.columns = [
-      { header: 'Fecha', key: 'fecha', width: 12 },
-      { header: 'Hora', key: 'hora', width: 10 },
-      { header: 'Empleado', key: 'empleado', width: 30 },
-      { header: 'DNI', key: 'dni', width: 14 },
-      { header: 'Sede', key: 'sede', width: 18 },
-      { header: 'Área', key: 'area', width: 18 },
-      { header: 'Tipo', key: 'tipo', width: 10 },
-      { header: 'Evento', key: 'evento', width: 22 },
-      { header: 'Min. tarde', key: 'minutos_tarde', width: 12 },
-      { header: 'Método', key: 'metodo', width: 16 },
-      { header: 'Estado', key: 'estado_validacion', width: 14 },
+      { header: "Fecha", key: "fecha", width: 12 },
+      { header: "Hora", key: "hora", width: 10 },
+      { header: "Empleado", key: "empleado", width: 30 },
+      { header: "DNI", key: "dni", width: 14 },
+      { header: "Sede", key: "sede", width: 18 },
+      { header: "Área", key: "area", width: 18 },
+      { header: "Tipo", key: "tipo", width: 10 },
+      { header: "Evento", key: "evento", width: 22 },
+      { header: "Min. tarde", key: "minutos_tarde", width: 12 },
+      { header: "Método", key: "metodo", width: 16 },
+      { header: "Estado", key: "estado_validacion", width: 14 },
     ];
 
     rows.forEach((r: any) => ws.addRow(r));
 
     const header = ws.getRow(1);
     header.font = { bold: true };
-    header.alignment = { vertical: 'middle', horizontal: 'center' };
-    ws.views = [{ state: 'frozen', ySplit: 1 }];
+    header.alignment = { vertical: "middle", horizontal: "center" };
+    ws.views = [{ state: "frozen", ySplit: 1 }];
 
     res.setHeader(
-      'Content-Type',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     );
     res.setHeader(
-      'Content-Disposition',
+      "Content-Disposition",
       'attachment; filename="reporte_asistencias_detalle.xlsx"',
     );
 
@@ -966,31 +1212,31 @@ export class ReportesController {
   }
 
   // ==========================
-  // ✅ DETALLE - PDF (NUEVO)
+  // DETALLE - PDF
   // ==========================
-  @Roles('Gerencia', 'RRHH')
-  @Get('detalle-pdf')
+  @Roles("Gerencia", "RRHH")
+  @Get("detalle-pdf")
   async detallePdf(
     @Res() res: Response,
-    @Query('desde') desde?: string,
-    @Query('hasta') hasta?: string,
-    @Query('usuarioId') usuarioId?: string,
-    @Query('sedeId') sedeId?: string,
+    @Query("desde") desde?: string,
+    @Query("hasta") hasta?: string,
+    @Query("usuarioId") usuarioId?: string,
+    @Query("sedeId") sedeId?: string,
   ) {
     if (!desde || !hasta) {
-      throw new BadRequestException('Debe indicar desde y hasta');
+      throw new BadRequestException("Debe indicar desde y hasta");
     }
 
     if (!usuarioId && !sedeId) {
-      const d1 = new Date(desde + 'T00:00:00');
-      const d2 = new Date(hasta + 'T00:00:00');
+      const d1 = new Date(desde + "T00:00:00");
+      const d2 = new Date(hasta + "T00:00:00");
       const diffDays = Math.floor((+d2 - +d1) / (1000 * 60 * 60 * 24)) + 1;
       if (!isFinite(diffDays) || diffDays <= 0) {
-        throw new BadRequestException('Rango inválido');
+        throw new BadRequestException("Rango inválido");
       }
       if (diffDays > 31) {
         throw new BadRequestException(
-          'Para descargar sin filtros (usuario/sede) el rango máximo permitido es 31 días.',
+          "Para descargar sin filtros (usuario/sede) el rango máximo permitido es 31 días.",
         );
       }
     }
@@ -999,8 +1245,8 @@ export class ReportesController {
     const conds: string[] = [
       `a.fecha_hora >= $1::date`,
       `a.fecha_hora <  ($2::date + interval '1 day')`,
-      this.filtroNoRechazado('a'),
-      this.filtroNoDniExcluido('u'),
+      this.filtroNoRechazado("a"),
+      this.filtroNoDniExcluido("u"),
     ];
 
     let p = 3;
@@ -1015,7 +1261,7 @@ export class ReportesController {
       p++;
     }
 
-    const where = conds.join(' AND ');
+    const where = conds.join(" AND ");
 
     const rows = await this.ds.query(
       `
@@ -1058,42 +1304,42 @@ export class ReportesController {
       params,
     );
 
-    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
-      'Content-Disposition',
+      "Content-Disposition",
       `attachment; filename="reporte_asistencias_detalle.pdf"`,
     );
 
     const doc = new PDFDocument({
       margin: 28,
-      size: 'A4',
-      layout: 'landscape',
+      size: "A4",
+      layout: "landscape",
     });
     doc.pipe(res);
 
-    const logoPath = path.join(process.cwd(), 'public', 'logo_negro.png');
+    const logoPath = path.join(process.cwd(), "public", "logo_negro.png");
     if (fs.existsSync(logoPath)) {
       doc.image(logoPath, doc.page.margins.left, 14, { width: 95 });
     }
 
     doc
-      .font('Helvetica-Bold')
+      .font("Helvetica-Bold")
       .fontSize(15)
-      .fillColor('#111')
-      .text('Asistencia - Detalle de marcajes', 0, 22, { align: 'center' });
+      .fillColor("#111")
+      .text("Asistencia - Detalle de marcajes", 0, 22, { align: "center" });
 
     doc.moveDown(1.2);
-    doc.font('Helvetica').fontSize(9).fillColor('#111');
+    doc.font("Helvetica").fontSize(9).fillColor("#111");
 
     const periodoTxt = `Periodo: ${this.formatDatePEFromDateOnly(
       desde,
     )} a ${this.formatDatePEFromDateOnly(hasta)}`;
-    const filtrosTxt = `Filtros: usuarioId=${usuarioId || '-'} | sedeId=${
-      sedeId || '-'
+    const filtrosTxt = `Filtros: usuarioId=${usuarioId || "-"} | sedeId=${
+      sedeId || "-"
     }`;
 
-    doc.text(periodoTxt, { align: 'center' });
-    doc.text(filtrosTxt, { align: 'center' });
+    doc.text(periodoTxt, { align: "center" });
+    doc.text(filtrosTxt, { align: "center" });
 
     doc.moveDown(0.8);
 
@@ -1132,17 +1378,17 @@ export class ReportesController {
 
     const fmtFechaPE = (d: any) => {
       const dt = d instanceof Date ? d : new Date(d);
-      const dd = String(dt.getDate()).padStart(2, '0');
-      const mm = String(dt.getMonth() + 1).padStart(2, '0');
+      const dd = String(dt.getDate()).padStart(2, "0");
+      const mm = String(dt.getMonth() + 1).padStart(2, "0");
       const yy = dt.getFullYear();
       return `${dd}/${mm}/${yy}`;
     };
 
     const getTextHeight = (text: any, w: number, bold = false) => {
-      doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(8.5);
-      return doc.heightOfString(String(text ?? ''), {
+      doc.font(bold ? "Helvetica-Bold" : "Helvetica").fontSize(8.5);
+      return doc.heightOfString(String(text ?? ""), {
         width: w - paddingX * 2,
-        align: 'left',
+        align: "left",
       });
     };
 
@@ -1152,31 +1398,31 @@ export class ReportesController {
       w: number,
       yPos: number,
       h: number,
-      opts?: { bold?: boolean; align?: 'left' | 'center'; header?: boolean },
+      opts?: { bold?: boolean; align?: "left" | "center"; header?: boolean },
     ) => {
       const bold = opts?.bold ?? false;
-      const align = opts?.align ?? 'left';
+      const align = opts?.align ?? "left";
       const header = opts?.header ?? false;
 
       if (header) {
         doc.save();
-        doc.rect(x, yPos, w, h).fill('#f2f2f2');
+        doc.rect(x, yPos, w, h).fill("#f2f2f2");
         doc.restore();
       }
 
       doc
         .save()
         .lineWidth(0.6)
-        .strokeColor('#888')
+        .strokeColor("#888")
         .rect(x, yPos, w, h)
         .stroke()
         .restore();
 
       doc
-        .font(bold ? 'Helvetica-Bold' : 'Helvetica')
+        .font(bold ? "Helvetica-Bold" : "Helvetica")
         .fontSize(8.5)
-        .fillColor('#111')
-        .text(String(text ?? ''), x + paddingX, yPos + paddingY, {
+        .fillColor("#111")
+        .text(String(text ?? ""), x + paddingX, yPos + paddingY, {
           width: w - paddingX * 2,
           align,
         });
@@ -1186,57 +1432,57 @@ export class ReportesController {
       const h = 22;
 
       let x = startX;
-      drawCell('Fecha', x, col.fecha, y, h, {
+      drawCell("Fecha", x, col.fecha, y, h, {
         bold: true,
         header: true,
-        align: 'center',
+        align: "center",
       });
       x += col.fecha;
 
-      drawCell('Hora', x, col.hora, y, h, {
+      drawCell("Hora", x, col.hora, y, h, {
         bold: true,
         header: true,
-        align: 'center',
+        align: "center",
       });
       x += col.hora;
 
-      drawCell('Empleado', x, col.empleado, y, h, {
+      drawCell("Empleado", x, col.empleado, y, h, {
         bold: true,
         header: true,
       });
       x += col.empleado;
 
-      drawCell('Sede', x, col.sede, y, h, {
+      drawCell("Sede", x, col.sede, y, h, {
         bold: true,
         header: true,
-        align: 'center',
+        align: "center",
       });
       x += col.sede;
 
-      drawCell('Tipo', x, col.tipo, y, h, {
+      drawCell("Tipo", x, col.tipo, y, h, {
         bold: true,
         header: true,
-        align: 'center',
+        align: "center",
       });
       x += col.tipo;
 
-      drawCell('Evento', x, col.evento, y, h, {
+      drawCell("Evento", x, col.evento, y, h, {
         bold: true,
         header: true,
       });
       x += col.evento;
 
-      drawCell('Min. tarde', x, col.tarde, y, h, {
+      drawCell("Min. tarde", x, col.tarde, y, h, {
         bold: true,
         header: true,
-        align: 'center',
+        align: "center",
       });
       x += col.tarde;
 
-      drawCell('Método', x, col.metodo, y, h, {
+      drawCell("Método", x, col.metodo, y, h, {
         bold: true,
         header: true,
-        align: 'center',
+        align: "center",
       });
 
       y += h;
@@ -1264,30 +1510,30 @@ export class ReportesController {
       }
 
       let x = startX;
-      drawCell(fmtFechaPE(r.fecha), x, col.fecha, y, rowH, { align: 'center' });
+      drawCell(fmtFechaPE(r.fecha), x, col.fecha, y, rowH, { align: "center" });
       x += col.fecha;
 
-      drawCell(r.hora, x, col.hora, y, rowH, { align: 'center' });
+      drawCell(r.hora, x, col.hora, y, rowH, { align: "center" });
       x += col.hora;
 
       drawCell(r.empleado, x, col.empleado, y, rowH);
       x += col.empleado;
 
-      drawCell(r.sede, x, col.sede, y, rowH, { align: 'center' });
+      drawCell(r.sede, x, col.sede, y, rowH, { align: "center" });
       x += col.sede;
 
-      drawCell(r.tipo, x, col.tipo, y, rowH, { align: 'center' });
+      drawCell(r.tipo, x, col.tipo, y, rowH, { align: "center" });
       x += col.tipo;
 
       drawCell(r.evento, x, col.evento, y, rowH);
       x += col.evento;
 
       drawCell(String(r.minutos_tarde ?? 0), x, col.tarde, y, rowH, {
-        align: 'center',
+        align: "center",
       });
       x += col.tarde;
 
-      drawCell(r.metodo, x, col.metodo, y, rowH, { align: 'center' });
+      drawCell(r.metodo, x, col.metodo, y, rowH, { align: "center" });
 
       y += rowH;
     }
@@ -1296,10 +1542,10 @@ export class ReportesController {
   }
 
   // ============================================
-  // Reporte maestro usuarios (✅ excluye DNI)
+  // Reporte maestro usuarios
   // ============================================
-  @Roles('Gerencia', 'RRHH')
-  @Get('usuarios-excel')
+  @Roles("Gerencia", "RRHH")
+  @Get("usuarios-excel")
   async usuariosExcel(@Res() res: Response) {
     const rows = await this.ds.query(
       `SELECT
@@ -1330,24 +1576,24 @@ export class ReportesController {
     );
 
     const workbook = new ExcelJS.Workbook();
-    const worksheet = workbook.addWorksheet('Usuarios');
+    const worksheet = workbook.addWorksheet("Usuarios");
 
     worksheet.columns = [
-      { header: 'ID', key: 'id', width: 36 },
-      { header: 'Nombre', key: 'nombre', width: 20 },
-      { header: 'Apellido paterno', key: 'apellido_paterno', width: 18 },
-      { header: 'Apellido materno', key: 'apellido_materno', width: 18 },
-      { header: 'Tipo doc.', key: 'tipo_documento', width: 10 },
-      { header: 'N° documento', key: 'numero_documento', width: 16 },
-      { header: 'Fecha nacimiento', key: 'fecha_nacimiento', width: 15 },
-      { header: 'Rol', key: 'rol', width: 15 },
-      { header: 'Sede', key: 'sede_nombre', width: 20 },
-      { header: 'Área', key: 'area_nombre', width: 20 },
-      { header: 'Email personal', key: 'email_personal', width: 28 },
-      { header: 'Email institucional', key: 'email_institucional', width: 28 },
-      { header: 'Teléfono', key: 'telefono_celular', width: 14 },
-      { header: 'Estado', key: 'estado', width: 12 },
-      { header: 'Fecha baja', key: 'fecha_baja', width: 18 },
+      { header: "ID", key: "id", width: 36 },
+      { header: "Nombre", key: "nombre", width: 20 },
+      { header: "Apellido paterno", key: "apellido_paterno", width: 18 },
+      { header: "Apellido materno", key: "apellido_materno", width: 18 },
+      { header: "Tipo doc.", key: "tipo_documento", width: 10 },
+      { header: "N° documento", key: "numero_documento", width: 16 },
+      { header: "Fecha nacimiento", key: "fecha_nacimiento", width: 15 },
+      { header: "Rol", key: "rol", width: 15 },
+      { header: "Sede", key: "sede_nombre", width: 20 },
+      { header: "Área", key: "area_nombre", width: 20 },
+      { header: "Email personal", key: "email_personal", width: 28 },
+      { header: "Email institucional", key: "email_institucional", width: 28 },
+      { header: "Teléfono", key: "telefono_celular", width: 14 },
+      { header: "Estado", key: "estado", width: 12 },
+      { header: "Fecha baja", key: "fecha_baja", width: 18 },
     ];
 
     for (const u of rows) {
@@ -1358,37 +1604,42 @@ export class ReportesController {
         apellido_materno: u.apellido_materno,
         tipo_documento: u.tipo_documento,
         numero_documento: u.numero_documento,
-        fecha_nacimiento: u.fecha_nacimiento ? new Date(u.fecha_nacimiento) : null,
+        fecha_nacimiento: u.fecha_nacimiento
+          ? new Date(u.fecha_nacimiento)
+          : null,
         rol: u.rol,
         sede_nombre: u.sede_nombre,
         area_nombre: u.area_nombre,
         email_personal: u.email_personal,
         email_institucional: u.email_institucional,
         telefono_celular: u.telefono_celular,
-        estado: u.activo ? 'ACTIVO' : 'INACTIVO',
+        estado: u.activo ? "ACTIVO" : "INACTIVO",
         fecha_baja: u.fecha_baja ? new Date(u.fecha_baja) : null,
       });
     }
 
     const headerRow = worksheet.getRow(1);
     headerRow.font = { bold: true };
-    headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
+    headerRow.alignment = { vertical: "middle", horizontal: "center" };
 
     res.setHeader(
-      'Content-Type',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     );
-    res.setHeader('Content-Disposition', 'attachment; filename="usuarios.xlsx"');
+    res.setHeader(
+      "Content-Disposition",
+      'attachment; filename="usuarios.xlsx"',
+    );
 
     await workbook.xlsx.write(res);
     res.end();
   }
 
   // ============================================
-  // ✅ Usuarios PDF (✅ excluye DNI)
+  // Usuarios PDF
   // ============================================
-  @Roles('Gerencia', 'RRHH')
-  @Get('usuarios-pdf')
+  @Roles("Gerencia", "RRHH")
+  @Get("usuarios-pdf")
   async usuariosPdf(@Res() res: Response) {
     const rows = await this.ds.query(
       `
@@ -1411,34 +1662,34 @@ export class ReportesController {
       `,
     );
 
-    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
-      'Content-Disposition',
+      "Content-Disposition",
       `attachment; filename="reporte_usuarios.pdf"`,
     );
 
     const doc = new PDFDocument({
       margin: 36,
-      size: 'A4',
-      layout: 'landscape',
+      size: "A4",
+      layout: "landscape",
     });
     doc.pipe(res);
 
-    const logoPath = path.join(process.cwd(), 'public', 'logo_negro.png');
+    const logoPath = path.join(process.cwd(), "public", "logo_negro.png");
     if (fs.existsSync(logoPath)) {
       doc.image(logoPath, doc.page.margins.left, 18, { width: 110 });
     }
 
     doc
-      .font('Helvetica-Bold')
+      .font("Helvetica-Bold")
       .fontSize(16)
-      .fillColor('#111')
-      .text('Reporte de Usuarios', 0, 30, { align: 'center' });
+      .fillColor("#111")
+      .text("Reporte de Usuarios", 0, 30, { align: "center" });
 
     doc.moveDown(1.4);
-    doc.font('Helvetica').fontSize(10).fillColor('#111');
-    doc.text(`Generado: ${new Date().toLocaleString('es-PE')}`, {
-      align: 'center',
+    doc.font("Helvetica").fontSize(10).fillColor("#111");
+    doc.text(`Generado: ${new Date().toLocaleString("es-PE")}`, {
+      align: "center",
     });
     doc.moveDown(0.8);
 
@@ -1467,10 +1718,10 @@ export class ReportesController {
     const minRowH = 22;
 
     const getTextHeight = (text: string, w: number, bold = false) => {
-      doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(9);
-      return doc.heightOfString(String(text ?? '-'), {
+      doc.font(bold ? "Helvetica-Bold" : "Helvetica").fontSize(9);
+      return doc.heightOfString(String(text ?? "-"), {
         width: w - paddingX * 2,
-        align: 'left',
+        align: "left",
       });
     };
 
@@ -1480,31 +1731,31 @@ export class ReportesController {
       w: number,
       yPos: number,
       h: number,
-      opts?: { bold?: boolean; align?: 'left' | 'center'; header?: boolean },
+      opts?: { bold?: boolean; align?: "left" | "center"; header?: boolean },
     ) => {
       const bold = opts?.bold ?? false;
-      const align = opts?.align ?? 'left';
+      const align = opts?.align ?? "left";
       const header = opts?.header ?? false;
 
       if (header) {
         doc.save();
-        doc.rect(x, yPos, w, h).fill('#f2f2f2');
+        doc.rect(x, yPos, w, h).fill("#f2f2f2");
         doc.restore();
       }
 
       doc
         .save()
         .lineWidth(0.6)
-        .strokeColor('#888')
+        .strokeColor("#888")
         .rect(x, yPos, w, h)
         .stroke()
         .restore();
 
       doc
-        .font(bold ? 'Helvetica-Bold' : 'Helvetica')
+        .font(bold ? "Helvetica-Bold" : "Helvetica")
         .fontSize(9)
-        .fillColor('#111')
-        .text(String(text ?? '-'), x + paddingX, yPos + paddingY, {
+        .fillColor("#111")
+        .text(String(text ?? "-"), x + paddingX, yPos + paddingY, {
           width: w - paddingX * 2,
           align,
         });
@@ -1512,43 +1763,43 @@ export class ReportesController {
 
     const drawHeader = () => {
       const h = 24;
-      drawCell('Nombre completo', startX, col.nombre, y, h, {
+      drawCell("Nombre completo", startX, col.nombre, y, h, {
         bold: true,
         header: true,
       });
-      drawCell('Tipo doc.', startX + col.nombre, col.tipo, y, h, {
+      drawCell("Tipo doc.", startX + col.nombre, col.tipo, y, h, {
         bold: true,
-        align: 'center',
+        align: "center",
         header: true,
       });
-      drawCell('N° documento', startX + col.nombre + col.tipo, col.doc, y, h, {
+      drawCell("N° documento", startX + col.nombre + col.tipo, col.doc, y, h, {
         bold: true,
-        align: 'center',
+        align: "center",
         header: true,
       });
       drawCell(
-        'Sede',
+        "Sede",
         startX + col.nombre + col.tipo + col.doc,
         col.sede,
         y,
         h,
-        { bold: true, align: 'center', header: true },
+        { bold: true, align: "center", header: true },
       );
       drawCell(
-        'Área',
+        "Área",
         startX + col.nombre + col.tipo + col.doc + col.sede,
         col.area,
         y,
         h,
-        { bold: true, align: 'center', header: true },
+        { bold: true, align: "center", header: true },
       );
       drawCell(
-        'Teléfono',
+        "Teléfono",
         startX + col.nombre + col.tipo + col.doc + col.sede + col.area,
         col.tel,
         y,
         h,
-        { bold: true, align: 'center', header: true },
+        { bold: true, align: "center", header: true },
       );
 
       y += h;
@@ -1580,41 +1831,48 @@ export class ReportesController {
         drawHeader();
       }
 
-      drawCell(String(r.nombre_completo || '-'), startX, col.nombre, y, rowH);
-      drawCell(String(r.tipo_doc || '-'), startX + col.nombre, col.tipo, y, rowH, {
-        align: 'center',
-      });
+      drawCell(String(r.nombre_completo || "-"), startX, col.nombre, y, rowH);
       drawCell(
-        String(r.numero_documento || '-'),
+        String(r.tipo_doc || "-"),
+        startX + col.nombre,
+        col.tipo,
+        y,
+        rowH,
+        {
+          align: "center",
+        },
+      );
+      drawCell(
+        String(r.numero_documento || "-"),
         startX + col.nombre + col.tipo,
         col.doc,
         y,
         rowH,
-        { align: 'center' },
+        { align: "center" },
       );
       drawCell(
-        String(r.sede || '-'),
+        String(r.sede || "-"),
         startX + col.nombre + col.tipo + col.doc,
         col.sede,
         y,
         rowH,
-        { align: 'center' },
+        { align: "center" },
       );
       drawCell(
-        String(r.area || '-'),
+        String(r.area || "-"),
         startX + col.nombre + col.tipo + col.doc + col.sede,
         col.area,
         y,
         rowH,
-        { align: 'center' },
+        { align: "center" },
       );
       drawCell(
-        String(r.telefono || '-'),
+        String(r.telefono || "-"),
         startX + col.nombre + col.tipo + col.doc + col.sede + col.area,
         col.tel,
         y,
         rowH,
-        { align: 'center' },
+        { align: "center" },
       );
 
       y += rowH;

@@ -1,23 +1,26 @@
 // feriados.service.ts
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { HttpService } from '@nestjs/axios';
-import { firstValueFrom } from 'rxjs';
-import { DataSource } from 'typeorm';
-import { Cron } from '@nestjs/schedule';
+import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { HttpService } from "@nestjs/axios";
+import { firstValueFrom } from "rxjs";
+import { DataSource } from "typeorm";
+import { Cron } from "@nestjs/schedule";
 
 type NagerHoliday = {
-  date: string;        // "YYYY-MM-DD"
+  date: string; // "YYYY-MM-DD"
   localName: string;
   name: string;
   countryCode: string;
-  types: string[];     // incluye "Public"
+  types: string[]; // incluye "Public"
 };
 
 @Injectable()
 export class FeriadosService implements OnModuleInit {
   private readonly logger = new Logger(FeriadosService.name);
 
-  constructor(private http: HttpService, private ds: DataSource) {}
+  constructor(
+    private http: HttpService,
+    private ds: DataSource,
+  ) {}
 
   // ✅ Al iniciar el backend, asegura que existan feriados del año actual
   async onModuleInit() {
@@ -31,21 +34,25 @@ export class FeriadosService implements OnModuleInit {
       );
 
       if ((count || 0) > 0) {
-        this.logger.log(`Feriados ${year} ya existen (${count}). No se ejecuta sync inicial.`);
+        this.logger.log(
+          `Feriados ${year} ya existen (${count}). No se ejecuta sync inicial.`,
+        );
         return;
       }
 
-      this.logger.log(`Tabla feriados sin datos para ${year}. Ejecutando sync inicial...`);
+      this.logger.log(
+        `Tabla feriados sin datos para ${year}. Ejecutando sync inicial...`,
+      );
       await this.syncPeruYear(year);
       // opcional: también traer el siguiente año
       await this.syncPeruYear(year + 1);
     } catch (e) {
-      this.logger.error('Error en sync inicial de feriados', e as any);
+      this.logger.error("Error en sync inicial de feriados", e);
     }
   }
 
   // ✅ Auto-sync anual: 1 de enero a las 05:00 (hora Perú)
-  @Cron('0 5 1 1 *', { timeZone: 'America/Lima' })
+  @Cron("0 5 1 1 *", { timeZone: "America/Lima" })
   async syncAutomaticoAnual() {
     const year = new Date().getFullYear();
     try {
@@ -54,7 +61,7 @@ export class FeriadosService implements OnModuleInit {
       await this.syncPeruYear(year + 1);
       this.logger.log(`Cron OK: feriados ${year}/${year + 1} sincronizados.`);
     } catch (e) {
-      this.logger.error('Cron ERROR sincronizando feriados', e as any);
+      this.logger.error("Cron ERROR sincronizando feriados", e);
     }
   }
 
@@ -66,7 +73,9 @@ export class FeriadosService implements OnModuleInit {
     );
 
     // solo feriados "Public" (nacionales)
-    const feriados = (data || []).filter(h => (h.types || []).includes('Public'));
+    const feriados = (data || []).filter((h) =>
+      (h.types || []).includes("Public"),
+    );
 
     for (const h of feriados) {
       await this.ds.query(
@@ -83,7 +92,11 @@ export class FeriadosService implements OnModuleInit {
       );
     }
 
-    return { year, total_api: data?.length ?? 0, total_public: feriados.length };
+    return {
+      year,
+      total_api: data?.length ?? 0,
+      total_public: feriados.length,
+    };
   }
 
   async listar(anio?: number) {

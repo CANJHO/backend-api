@@ -1,5 +1,5 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { DataSource } from 'typeorm';
+import { Injectable, NotFoundException } from "@nestjs/common";
+import { DataSource } from "typeorm";
 
 @Injectable()
 export class AreasService {
@@ -43,7 +43,7 @@ export class AreasService {
     );
 
     if (!rows[0]) {
-      throw new NotFoundException('Área no existe');
+      throw new NotFoundException("Área no existe");
     }
 
     return rows[0];
@@ -54,10 +54,7 @@ export class AreasService {
       `INSERT INTO areas (nombre, activo)
        VALUES ($1, COALESCE($2, true))
        RETURNING id`,
-      [
-        dto.nombre,
-        dto.activo,
-      ],
+      [dto.nombre, dto.activo],
     );
 
     return this.get(rows[0].id);
@@ -69,11 +66,7 @@ export class AreasService {
           SET nombre = COALESCE($2, nombre),
               activo = COALESCE($3, activo)
         WHERE id = $1`,
-      [
-        id,
-        dto.nombre,
-        dto.activo,
-      ],
+      [id, dto.nombre, dto.activo],
     );
 
     return this.get(id);

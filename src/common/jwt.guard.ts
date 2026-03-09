@@ -3,10 +3,10 @@ import {
   ExecutionContext,
   Injectable,
   UnauthorizedException,
-} from '@nestjs/common';
-import { Reflector } from '@nestjs/core';
-import { AuthService } from '../auth/auth.service';
-import { IS_PUBLIC_KEY } from './public.decorator';
+} from "@nestjs/common";
+import { Reflector } from "@nestjs/core";
+import { AuthService } from "../auth/auth.service";
+import { IS_PUBLIC_KEY } from "./public.decorator";
 
 @Injectable()
 export class JwtGuard implements CanActivate {
@@ -24,13 +24,13 @@ export class JwtGuard implements CanActivate {
     if (isPublic) return true;
 
     const req = ctx.switchToHttp().getRequest();
-    const authHeader = (req.headers['authorization'] || '') as string;
+    const authHeader = (req.headers["authorization"] || "") as string;
 
-    if (!authHeader.startsWith('Bearer ')) {
-      throw new UnauthorizedException('Falta token');
+    if (!authHeader.startsWith("Bearer ")) {
+      throw new UnauthorizedException("Falta token");
     }
 
-    const token = authHeader.slice('Bearer '.length).trim();
+    const token = authHeader.slice("Bearer ".length).trim();
 
     try {
       const payload = await this.auth.verify(token);
@@ -38,8 +38,7 @@ export class JwtGuard implements CanActivate {
       req.user = payload;
       return true;
     } catch {
-      throw new UnauthorizedException('Token inválido o expirado');
+      throw new UnauthorizedException("Token inválido o expirado");
     }
   }
 }
-

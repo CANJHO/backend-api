@@ -195,6 +195,55 @@ export class ReportesController {
   }
 
   // ==========================
+  // Helper: etiquetas filtros
+  // ==========================
+  private async resolverEtiquetasFiltros(
+    usuarioId?: string,
+    sedeId?: string,
+  ): Promise<{ usuarioLabel: string; sedeLabel: string }> {
+    let usuarioLabel = "-";
+    let sedeLabel = "-";
+
+    if (usuarioId) {
+      const usuarioRows = await this.ds.query(
+        `
+        SELECT TRIM(
+          COALESCE(u.nombre, '') || ' ' ||
+          COALESCE(u.apellido_paterno, '') || ' ' ||
+          COALESCE(u.apellido_materno, '')
+        ) AS nombre
+        FROM usuarios u
+        WHERE u.id = $1::uuid
+        LIMIT 1
+        `,
+        [usuarioId],
+      );
+
+      if (usuarioRows?.length) {
+        usuarioLabel = usuarioRows[0].nombre || usuarioId;
+      }
+    }
+
+    if (sedeId) {
+      const sedeRows = await this.ds.query(
+        `
+        SELECT COALESCE(s.nombre, '-') AS nombre
+        FROM sedes s
+        WHERE s.id = $1::uuid
+        LIMIT 1
+        `,
+        [sedeId],
+      );
+
+      if (sedeRows?.length) {
+        sedeLabel = sedeRows[0].nombre || sedeId;
+      }
+    }
+
+    return { usuarioLabel, sedeLabel };
+  }
+
+  // ==========================
   // DATA RESUMEN
   // ==========================
   private async obtenerResumenData(params: {
@@ -911,13 +960,17 @@ export class ReportesController {
       sedeId,
     });
 
+    const { usuarioLabel, sedeLabel } = await this.resolverEtiquetasFiltros(
+      usuarioId,
+      sedeId,
+    );
+
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
       "Content-Disposition",
       `attachment; filename="reporte_asistencias_resumen.pdf"`,
     );
 
-    // ✅ Landscape para que entren bien todas las columnas
     const doc = new PDFDocument({
       margin: 24,
       size: "A4",
@@ -943,18 +996,10 @@ export class ReportesController {
       startDate,
     )} a ${this.formatDatePEFromDateOnly(endDate)}`;
 
-    const filtrosTxt = `Filtros: usuarioId=${
-      result.filtros.usuarioId ?? "-"
-    } | sedeId=${result.filtros.sedeId ?? "-"}`;
-
-    doc.text(periodoTxt, doc.page.margins.left, doc.y);
-    doc.text(filtrosTxt, doc.page.margins.left, doc.y + 2);
-
-    doc.moveDown(1);
+    const filtrosTxt = `Filtros: usuario=${usuarioLabel} | sede=${sedeLabel}`;
 
     const rows: ResumenRow[] = result.data as ResumenRow[];
 
-    // ✅ anchos ajustados para landscape
     const col = {
       rk: 24,
       usuario: 260,
@@ -968,7 +1013,6 @@ export class ReportesController {
       hhsal: 58,
     };
 
-    // ✅ ahora sí suma todas las columnas
     const tableWidth =
       col.rk +
       col.usuario +
@@ -987,7 +1031,20 @@ export class ReportesController {
     const startX =
       doc.page.margins.left + Math.max(0, (contentWidth - tableWidth) / 2);
 
-    let y = doc.y;
+    // ✅ Periodo y filtros alineados con la tabla
+    const infoY = doc.y;
+
+    doc.text(periodoTxt, startX, infoY, {
+      width: 320,
+      align: "left",
+    });
+
+    doc.text(filtrosTxt, startX, infoY + 18, {
+      width: 420,
+      align: "left",
+    });
+
+    let y = infoY + 42;
 
     const drawHeader = () => {
       doc.font("Helvetica-Bold").fontSize(9).fillColor("#111");
@@ -1038,7 +1095,7 @@ export class ReportesController {
         width: col.tard,
         align: "center",
       });
-      x += col.tard; // ✅ este faltaba
+      x += col.tard;
 
       doc.text("HH:Tard", x, y, {
         width: col.hhtard,
@@ -1105,7 +1162,6 @@ export class ReportesController {
       });
       x += col.tard_ref;
 
-      // ✅ semáforo solo en total
       if ((r.tardanzas ?? 0) === 0) doc.fillColor("#16a34a");
       else if ((r.tardanzas ?? 0) <= 2) doc.fillColor("#d97706");
       else doc.fillColor("#dc2626");
@@ -1148,8 +1204,7 @@ export class ReportesController {
     }
 
     doc.end();
-  }
-  // ==========================
+  } // ==========================
   // DETALLE - EXCEL
   // ==========================
   @Roles("Gerencia", "RRHH")

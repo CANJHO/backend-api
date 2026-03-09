@@ -28,10 +28,8 @@ type ResumenRow = {
   minutos_tarde_jornada_in: number;
   minutos_tarde_refrigerio_in: number;
 
-  // ✅ nuevo: minutos acumulados al salir después del horario
   minutos_extra_salida: number;
 
-  // totales tardanza
   tardanzas: number;
   minutos_tarde_total: number;
 
@@ -47,6 +45,20 @@ type ResumenRow = {
   horario_vigente_desde: string | null;
 
   ranking?: number;
+};
+
+type FiltrosQuery = {
+  period?: string;
+  ref?: string;
+  desde?: string;
+  hasta?: string;
+  usuarioId?: string;
+  sedeId?: string;
+};
+
+type SqlBuildResult = {
+  params: any[];
+  where: string;
 };
 
 @Controller("reportes")
@@ -67,7 +79,7 @@ export class ReportesController {
   }
 
   // ==========================
-  // Helpers fechas / filtros
+  // Helpers base
   // ==========================
   private pad2(n: number) {
     return String(n).padStart(2, "0");
@@ -82,6 +94,13 @@ export class ReportesController {
   private formatDatePEFromDateOnly(yyyyMmDd: string): string {
     const [y, m, d] = yyyyMmDd.split("-");
     return `${d}/${m}/${y}`;
+  }
+
+  private minutosToHHMM(minutos: number): string {
+    const m = Math.max(0, Number(minutos) || 0);
+    const hh = Math.floor(m / 60);
+    const mm = m % 60;
+    return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
   }
 
   private resolverRango(params: {
@@ -184,19 +203,132 @@ export class ReportesController {
     return { start, end, startDate, endDate };
   }
 
-  // ==========================
-  // Helper: Minutos -> HH:MM
-  // ==========================
-  private minutosToHHMM(minutos: number): string {
-    const m = Math.max(0, Number(minutos) || 0);
-    const hh = Math.floor(m / 60);
-    const mm = m % 60;
-    return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+  private validarRangoDetalle(desde?: string, hasta?: string) {
+    if (!desde || !hasta) {
+      throw new BadRequestException("Debe indicar desde y hasta");
+    }
   }
 
-  // ==========================
-  // Helper: etiquetas filtros
-  // ==========================
+  private validarRangoMaximoSinFiltros(
+    desde?: string,
+    hasta?: string,
+    usuarioId?: string,
+    sedeId?: string,
+  ) {
+    if (usuarioId || sedeId) return;
+    if (!desde || !hasta) return;
+
+    const d1 = new Date(desde + "T00:00:00");
+    const d2 = new Date(hasta + "T00:00:00");
+    const diffDays = Math.floor((+d2 - +d1) / (1000 * 60 * 60 * 24)) + 1;
+
+    if (!isFinite(diffDays) || diffDays <= 0) {
+      throw new BadRequestException("Rango inválido");
+    }
+
+    if (diffDays > 31) {
+      throw new BadRequestException(
+        "Para descargar sin filtros (usuario/sede) el rango máximo permitido es 31 días.",
+      );
+    }
+  }
+
+  private buildWhereAsistencias(params: {
+    desde: string;
+    hasta: string;
+    usuarioId?: string;
+    sedeId?: string;
+    aliasAsistencia?: string;
+    aliasUsuario?: string;
+    fechaModo?: "datetime" | "date";
+    usarAliasUsuarioEnUuid?: boolean;
+  }): SqlBuildResult {
+    const {
+      desde,
+      hasta,
+      usuarioId,
+      sedeId,
+      aliasAsistencia = "a",
+      aliasUsuario = "u",
+      fechaModo = "date",
+      usarAliasUsuarioEnUuid = false,
+    } = params;
+
+    const sqlParams: any[] = [desde, hasta];
+    const conds: string[] = [
+      fechaModo === "datetime"
+        ? `${aliasAsistencia}.fecha_hora >= $1::date AND ${aliasAsistencia}.fecha_hora < ($2::date + interval '1 day')`
+        : `${aliasAsistencia}.fecha_hora >= $1::date AND ${aliasAsistencia}.fecha_hora < ($2::date + interval '1 day')`,
+      this.filtroNoRechazado(aliasAsistencia),
+      this.filtroNoDniExcluido(aliasUsuario),
+    ];
+
+    let p = 3;
+
+    if (usuarioId) {
+      sqlParams.push(usuarioId);
+      conds.push(
+        usarAliasUsuarioEnUuid
+          ? `${aliasUsuario}.id = $${p}::uuid`
+          : `${aliasAsistencia}.usuario_id = $${p}::uuid`,
+      );
+      p++;
+    }
+
+    if (sedeId) {
+      sqlParams.push(sedeId);
+      conds.push(`${aliasUsuario}.sede_id = $${p}::uuid`);
+      p++;
+    }
+
+    return {
+      params: sqlParams,
+      where: conds.join(" AND "),
+    };
+  }
+
+  private applyExcelHeaderStyle(ws: ExcelJS.Worksheet) {
+    const header = ws.getRow(1);
+    header.font = { bold: true };
+    header.alignment = { vertical: "middle", horizontal: "center" };
+    ws.views = [{ state: "frozen", ySplit: 1 }];
+  }
+
+  private async sendExcel(
+    res: Response,
+    wb: ExcelJS.Workbook,
+    filename: string,
+  ) {
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    await wb.xlsx.write(res);
+    res.end();
+  }
+
+  private getLogoPath() {
+    return path.join(process.cwd(), "public", "logo_negro.png");
+  }
+
+  private addLogoIfExists(
+    doc: PDFKit.PDFDocument,
+    width: number,
+    x?: number,
+    y?: number,
+  ) {
+    const logoPath = this.getLogoPath();
+    if (fs.existsSync(logoPath)) {
+      doc.image(
+        logoPath,
+        x ?? doc.page.margins.left,
+        y ?? doc.page.margins.top - 8,
+        { width },
+      );
+    }
+  }
+
   private async resolverEtiquetasFiltros(
     usuarioId?: string,
     sedeId?: string,
@@ -246,38 +378,18 @@ export class ReportesController {
   // ==========================
   // DATA RESUMEN
   // ==========================
-  private async obtenerResumenData(params: {
-    period?: string;
-    ref?: string;
-    desde?: string;
-    hasta?: string;
-    usuarioId?: string;
-    sedeId?: string;
-  }) {
+  private async obtenerResumenData(params: FiltrosQuery) {
     const { startDate, endDate } = this.resolverRango(params);
     const { usuarioId, sedeId } = params;
 
-    // -------- resumen marcas/tardanzas + minutos salida
-    const resumenParams: any[] = [startDate, endDate];
-    const resumenConds: string[] = [
-      `a.fecha_hora >= $1::date AND a.fecha_hora < ($2::date + interval '1 day')`,
-      this.filtroNoRechazado("a"),
-      this.filtroNoDniExcluido("u"),
-    ];
-
-    let p = 3;
-    if (usuarioId) {
-      resumenParams.push(usuarioId);
-      resumenConds.push(`a.usuario_id = $${p}::uuid`);
-      p++;
-    }
-    if (sedeId) {
-      resumenParams.push(sedeId);
-      resumenConds.push(`u.sede_id = $${p}::uuid`);
-      p++;
-    }
-
-    const where = resumenConds.join(" AND ");
+    const resumenBuild = this.buildWhereAsistencias({
+      desde: startDate,
+      hasta: endDate,
+      usuarioId,
+      sedeId,
+      aliasAsistencia: "a",
+      aliasUsuario: "u",
+    });
 
     const resumenRows = await this.ds.query(
       `
@@ -291,7 +403,7 @@ export class ReportesController {
           COALESCE(a.minutos_tarde, 0) AS minutos_tarde
         FROM asistencias a
         JOIN usuarios u ON u.id = a.usuario_id
-        WHERE ${where}
+        WHERE ${resumenBuild.where}
       ),
       asist_con_horario AS (
         SELECT
@@ -361,10 +473,9 @@ export class ReportesController {
       JOIN usuarios u ON u.id = a.usuario_id
       GROUP BY u.id, u.nombre, u.apellido_paterno, u.apellido_materno
       `,
-      resumenParams,
+      resumenBuild.params,
     );
 
-    // -------- ausencias (calendario) excluye DNI, y asistencia del día no cuenta rechazados
     const ausParams: any[] = [startDate, endDate];
     let usuariosFiltro = `WHERE u.activo = TRUE AND COALESCE(u.numero_documento,'') <> '${this.DNI_EXCLUIDO}'`;
 
@@ -526,7 +637,6 @@ export class ReportesController {
       ausParams,
     );
 
-    // -------- merge
     const map = new Map<string, ResumenRow>();
 
     for (const r of resumenRows) {
@@ -751,22 +861,8 @@ export class ReportesController {
       });
     }
 
-    const header = ws.getRow(1);
-    header.font = { bold: true };
-    header.alignment = { vertical: "middle", horizontal: "center" };
-    ws.views = [{ state: "frozen", ySplit: 1 }];
-
-    res.setHeader(
-      "Content-Type",
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    );
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename="reporte_asistencias_resumen.xlsx"`,
-    );
-
-    await wb.xlsx.write(res);
-    res.end();
+    this.applyExcelHeaderStyle(ws);
+    await this.sendExcel(res, wb, "reporte_asistencias_resumen.xlsx");
   }
 
   // ==========================
@@ -781,31 +877,16 @@ export class ReportesController {
     @Query("usuarioId") usuarioId?: string,
     @Query("sedeId") sedeId?: string,
   ) {
-    if (!desde || !hasta) {
-      throw new BadRequestException("Debe indicar desde y hasta");
-    }
+    this.validarRangoDetalle(desde, hasta);
 
-    const params: any[] = [desde, hasta];
-    const conds: string[] = [
-      `a.fecha_hora >= $1::date`,
-      `a.fecha_hora < ($2::date + interval '1 day')`,
-      this.filtroNoRechazado("a"),
-      this.filtroNoDniExcluido("u"),
-    ];
-
-    let p = 3;
-    if (usuarioId) {
-      params.push(usuarioId);
-      conds.push(`u.id = $${p}::uuid`);
-      p++;
-    }
-    if (sedeId) {
-      params.push(sedeId);
-      conds.push(`u.sede_id = $${p}::uuid`);
-      p++;
-    }
-
-    const where = conds.join(" AND ");
+    const build = this.buildWhereAsistencias({
+      desde: desde!,
+      hasta: hasta!,
+      usuarioId,
+      sedeId,
+      aliasAsistencia: "a",
+      aliasUsuario: "u",
+    });
 
     const rows = await this.ds.query(
       `
@@ -823,7 +904,7 @@ export class ReportesController {
         JOIN usuarios u ON u.id = a.usuario_id
         LEFT JOIN sedes s ON s.id = u.sede_id
         LEFT JOIN areas ar ON ar.id = u.area_id
-        WHERE ${where}
+        WHERE ${build.where}
       ),
       salida_calc AS (
         SELECT
@@ -884,7 +965,7 @@ export class ReportesController {
       GROUP BY b.fecha, b.usuario, b.sede, b.area, sc.minutos_extra_salida
       ORDER BY b.fecha, b.usuario
       `,
-      params,
+      build.params,
     );
 
     const wb = new ExcelJS.Workbook();
@@ -912,22 +993,8 @@ export class ReportesController {
       });
     });
 
-    const header = ws.getRow(1);
-    header.font = { bold: true };
-    header.alignment = { vertical: "middle", horizontal: "center" };
-    ws.views = [{ state: "frozen", ySplit: 1 }];
-
-    res.setHeader(
-      "Content-Type",
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    );
-    res.setHeader(
-      "Content-Disposition",
-      'attachment; filename="reporte_asistencias_resumen_dia.xlsx"',
-    );
-
-    await wb.xlsx.write(res);
-    res.end();
+    this.applyExcelHeaderStyle(ws);
+    await this.sendExcel(res, wb, "reporte_asistencias_resumen_dia.xlsx");
   }
 
   // ==========================
@@ -978,10 +1045,7 @@ export class ReportesController {
     });
     doc.pipe(res);
 
-    const logoPath = path.join(process.cwd(), "public", "logo_negro.png");
-    if (fs.existsSync(logoPath)) {
-      doc.image(logoPath, doc.page.margins.left, 16, { width: 95 });
-    }
+    this.addLogoIfExists(doc, 95, doc.page.margins.left, 16);
 
     doc
       .font("Helvetica-Bold")
@@ -995,7 +1059,6 @@ export class ReportesController {
     const periodoTxt = `Periodo: ${this.formatDatePEFromDateOnly(
       startDate,
     )} a ${this.formatDatePEFromDateOnly(endDate)}`;
-
     const filtrosTxt = `Filtros: usuario=${usuarioLabel} | sede=${sedeLabel}`;
 
     const rows: ResumenRow[] = result.data as ResumenRow[];
@@ -1031,16 +1094,15 @@ export class ReportesController {
     const startX =
       doc.page.margins.left + Math.max(0, (contentWidth - tableWidth) / 2);
 
-    // ✅ Periodo y filtros alineados con la tabla
     const infoY = doc.y;
 
     doc.text(periodoTxt, startX, infoY, {
-      width: 320,
+      width: 420,
       align: "left",
     });
 
     doc.text(filtrosTxt, startX, infoY + 18, {
-      width: 420,
+      width: 620,
       align: "left",
     });
 
@@ -1049,11 +1111,7 @@ export class ReportesController {
     const drawHeader = () => {
       doc.font("Helvetica-Bold").fontSize(9).fillColor("#111");
 
-      doc.text("Rk", startX, y, {
-        width: col.rk,
-        align: "center",
-      });
-
+      doc.text("Rk", startX, y, { width: col.rk, align: "center" });
       doc.text("Usuario", startX + col.rk, y, {
         width: col.usuario,
         align: "left",
@@ -1061,52 +1119,28 @@ export class ReportesController {
 
       let x = startX + col.rk + col.usuario;
 
-      doc.text("Lab.", x, y, {
-        width: col.lab,
-        align: "center",
-      });
+      doc.text("Lab.", x, y, { width: col.lab, align: "center" });
       x += col.lab;
 
-      doc.text("Asis.", x, y, {
-        width: col.asis,
-        align: "center",
-      });
+      doc.text("Asis.", x, y, { width: col.asis, align: "center" });
       x += col.asis;
 
-      doc.text("Aus.I", x, y, {
-        width: col.ausi,
-        align: "center",
-      });
+      doc.text("Aus.I", x, y, { width: col.ausi, align: "center" });
       x += col.ausi;
 
-      doc.text("T.Ing", x, y, {
-        width: col.tard_ing,
-        align: "center",
-      });
+      doc.text("T.Ing", x, y, { width: col.tard_ing, align: "center" });
       x += col.tard_ing;
 
-      doc.text("T.Ref", x, y, {
-        width: col.tard_ref,
-        align: "center",
-      });
+      doc.text("T.Ref", x, y, { width: col.tard_ref, align: "center" });
       x += col.tard_ref;
 
-      doc.text("T.Total", x, y, {
-        width: col.tard,
-        align: "center",
-      });
+      doc.text("T.Total", x, y, { width: col.tard, align: "center" });
       x += col.tard;
 
-      doc.text("HH:Tard", x, y, {
-        width: col.hhtard,
-        align: "center",
-      });
+      doc.text("HH:Tard", x, y, { width: col.hhtard, align: "center" });
       x += col.hhtard;
 
-      doc.text("HH:Acum", x, y, {
-        width: col.hhsal,
-        align: "center",
-      });
+      doc.text("HH:Acum", x, y, { width: col.hhsal, align: "center" });
 
       doc
         .moveTo(startX, y + 14)
@@ -1204,7 +1238,9 @@ export class ReportesController {
     }
 
     doc.end();
-  } // ==========================
+  }
+
+  // ==========================
   // DETALLE - EXCEL
   // ==========================
   @Roles("Gerencia", "RRHH")
@@ -1216,45 +1252,18 @@ export class ReportesController {
     @Query("usuarioId") usuarioId?: string,
     @Query("sedeId") sedeId?: string,
   ) {
-    if (!desde || !hasta) {
-      throw new BadRequestException("Debe indicar desde y hasta");
-    }
+    this.validarRangoDetalle(desde, hasta);
+    this.validarRangoMaximoSinFiltros(desde, hasta, usuarioId, sedeId);
 
-    if (!usuarioId && !sedeId) {
-      const d1 = new Date(desde + "T00:00:00");
-      const d2 = new Date(hasta + "T00:00:00");
-      const diffDays = Math.floor((+d2 - +d1) / (1000 * 60 * 60 * 24)) + 1;
-      if (!isFinite(diffDays) || diffDays <= 0) {
-        throw new BadRequestException("Rango inválido");
-      }
-      if (diffDays > 31) {
-        throw new BadRequestException(
-          "Para descargar sin filtros (usuario/sede) el rango máximo permitido es 31 días.",
-        );
-      }
-    }
-
-    const params: any[] = [desde, hasta];
-    const conds: string[] = [
-      `a.fecha_hora >= $1::date`,
-      `a.fecha_hora <  ($2::date + interval '1 day')`,
-      this.filtroNoRechazado("a"),
-      this.filtroNoDniExcluido("u"),
-    ];
-
-    let p = 3;
-    if (usuarioId) {
-      params.push(usuarioId);
-      conds.push(`u.id = $${p}::uuid`);
-      p++;
-    }
-    if (sedeId) {
-      params.push(sedeId);
-      conds.push(`u.sede_id = $${p}::uuid`);
-      p++;
-    }
-
-    const where = conds.join(" AND ");
+    const build = this.buildWhereAsistencias({
+      desde: desde!,
+      hasta: hasta!,
+      usuarioId,
+      sedeId,
+      aliasAsistencia: "a",
+      aliasUsuario: "u",
+      usarAliasUsuarioEnUuid: true,
+    });
 
     const rows = await this.ds.query(
       `
@@ -1295,10 +1304,10 @@ export class ReportesController {
       JOIN usuarios u ON u.id = a.usuario_id
       LEFT JOIN sedes s ON s.id = u.sede_id
       LEFT JOIN areas ar ON ar.id = u.area_id
-      WHERE ${where}
+      WHERE ${build.where}
       ORDER BY empleado, fecha, hora
       `,
-      params,
+      build.params,
     );
 
     const wb = new ExcelJS.Workbook();
@@ -1320,22 +1329,8 @@ export class ReportesController {
 
     rows.forEach((r: any) => ws.addRow(r));
 
-    const header = ws.getRow(1);
-    header.font = { bold: true };
-    header.alignment = { vertical: "middle", horizontal: "center" };
-    ws.views = [{ state: "frozen", ySplit: 1 }];
-
-    res.setHeader(
-      "Content-Type",
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    );
-    res.setHeader(
-      "Content-Disposition",
-      'attachment; filename="reporte_asistencias_detalle.xlsx"',
-    );
-
-    await wb.xlsx.write(res);
-    res.end();
+    this.applyExcelHeaderStyle(ws);
+    await this.sendExcel(res, wb, "reporte_asistencias_detalle.xlsx");
   }
 
   // ==========================
@@ -1350,45 +1345,18 @@ export class ReportesController {
     @Query("usuarioId") usuarioId?: string,
     @Query("sedeId") sedeId?: string,
   ) {
-    if (!desde || !hasta) {
-      throw new BadRequestException("Debe indicar desde y hasta");
-    }
+    this.validarRangoDetalle(desde, hasta);
+    this.validarRangoMaximoSinFiltros(desde, hasta, usuarioId, sedeId);
 
-    if (!usuarioId && !sedeId) {
-      const d1 = new Date(desde + "T00:00:00");
-      const d2 = new Date(hasta + "T00:00:00");
-      const diffDays = Math.floor((+d2 - +d1) / (1000 * 60 * 60 * 24)) + 1;
-      if (!isFinite(diffDays) || diffDays <= 0) {
-        throw new BadRequestException("Rango inválido");
-      }
-      if (diffDays > 31) {
-        throw new BadRequestException(
-          "Para descargar sin filtros (usuario/sede) el rango máximo permitido es 31 días.",
-        );
-      }
-    }
-
-    const params: any[] = [desde, hasta];
-    const conds: string[] = [
-      `a.fecha_hora >= $1::date`,
-      `a.fecha_hora <  ($2::date + interval '1 day')`,
-      this.filtroNoRechazado("a"),
-      this.filtroNoDniExcluido("u"),
-    ];
-
-    let p = 3;
-    if (usuarioId) {
-      params.push(usuarioId);
-      conds.push(`u.id = $${p}::uuid`);
-      p++;
-    }
-    if (sedeId) {
-      params.push(sedeId);
-      conds.push(`u.sede_id = $${p}::uuid`);
-      p++;
-    }
-
-    const where = conds.join(" AND ");
+    const build = this.buildWhereAsistencias({
+      desde: desde!,
+      hasta: hasta!,
+      usuarioId,
+      sedeId,
+      aliasAsistencia: "a",
+      aliasUsuario: "u",
+      usarAliasUsuarioEnUuid: true,
+    });
 
     const rows = await this.ds.query(
       `
@@ -1425,10 +1393,15 @@ export class ReportesController {
       FROM asistencias a
       JOIN usuarios u ON u.id = a.usuario_id
       LEFT JOIN sedes s ON s.id = u.sede_id
-      WHERE ${where}
+      WHERE ${build.where}
       ORDER BY fecha, hora, empleado
       `,
-      params,
+      build.params,
+    );
+
+    const { usuarioLabel, sedeLabel } = await this.resolverEtiquetasFiltros(
+      usuarioId,
+      sedeId,
     );
 
     res.setHeader("Content-Type", "application/pdf");
@@ -1444,10 +1417,7 @@ export class ReportesController {
     });
     doc.pipe(res);
 
-    const logoPath = path.join(process.cwd(), "public", "logo_negro.png");
-    if (fs.existsSync(logoPath)) {
-      doc.image(logoPath, doc.page.margins.left, 14, { width: 95 });
-    }
+    this.addLogoIfExists(doc, 95, doc.page.margins.left, 14);
 
     doc
       .font("Helvetica-Bold")
@@ -1459,15 +1429,12 @@ export class ReportesController {
     doc.font("Helvetica").fontSize(9).fillColor("#111");
 
     const periodoTxt = `Periodo: ${this.formatDatePEFromDateOnly(
-      desde,
-    )} a ${this.formatDatePEFromDateOnly(hasta)}`;
-    const filtrosTxt = `Filtros: usuarioId=${usuarioId || "-"} | sedeId=${
-      sedeId || "-"
-    }`;
+      desde!,
+    )} a ${this.formatDatePEFromDateOnly(hasta!)}`;
+    const filtrosTxt = `Filtros: usuario=${usuarioLabel} | sede=${sedeLabel}`;
 
     doc.text(periodoTxt, { align: "center" });
     doc.text(filtrosTxt, { align: "center" });
-
     doc.moveDown(0.8);
 
     const col = {
@@ -1702,10 +1669,10 @@ export class ReportesController {
       ORDER BY u.created_at DESC`,
     );
 
-    const workbook = new ExcelJS.Workbook();
-    const worksheet = workbook.addWorksheet("Usuarios");
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Usuarios");
 
-    worksheet.columns = [
+    ws.columns = [
       { header: "ID", key: "id", width: 36 },
       { header: "Nombre", key: "nombre", width: 20 },
       { header: "Apellido paterno", key: "apellido_paterno", width: 18 },
@@ -1724,7 +1691,7 @@ export class ReportesController {
     ];
 
     for (const u of rows) {
-      worksheet.addRow({
+      ws.addRow({
         id: u.id,
         nombre: u.nombre,
         apellido_paterno: u.apellido_paterno,
@@ -1745,21 +1712,8 @@ export class ReportesController {
       });
     }
 
-    const headerRow = worksheet.getRow(1);
-    headerRow.font = { bold: true };
-    headerRow.alignment = { vertical: "middle", horizontal: "center" };
-
-    res.setHeader(
-      "Content-Type",
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    );
-    res.setHeader(
-      "Content-Disposition",
-      'attachment; filename="usuarios.xlsx"',
-    );
-
-    await workbook.xlsx.write(res);
-    res.end();
+    this.applyExcelHeaderStyle(ws);
+    await this.sendExcel(res, wb, "usuarios.xlsx");
   }
 
   // ============================================
@@ -1802,10 +1756,7 @@ export class ReportesController {
     });
     doc.pipe(res);
 
-    const logoPath = path.join(process.cwd(), "public", "logo_negro.png");
-    if (fs.existsSync(logoPath)) {
-      doc.image(logoPath, doc.page.margins.left, 18, { width: 110 });
-    }
+    this.addLogoIfExists(doc, 110, doc.page.margins.left, 18);
 
     doc
       .font("Helvetica-Bold")
@@ -1965,9 +1916,7 @@ export class ReportesController {
         col.tipo,
         y,
         rowH,
-        {
-          align: "center",
-        },
+        { align: "center" },
       );
       drawCell(
         String(r.numero_documento || "-"),

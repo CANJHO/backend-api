@@ -2054,50 +2054,61 @@ export class ReportesController {
       });
     };
 
-    const drawCell = (
-      text: any,
-      x: number,
-      width: number,
-      yPos: number,
-      height: number,
-      opts?: {
-        bold?: boolean;
-        align?: "left" | "center";
-        bgColor?: string;
-        textColor?: string;
-        fontSize?: number;
-        borderColor?: string;
-      },
-    ) => {
-      const bgColor = opts?.bgColor;
-      const textColor = opts?.textColor ?? "#111111";
-      const borderColor = opts?.borderColor ?? "#BFBFBF";
-      const align = opts?.align ?? "left";
-      const fontSize = opts?.fontSize ?? 9;
+       const drawCell = (
+        text: any,
+        x: number,
+        width: number,
+        yPos: number,
+        height: number,
+        opts?: {
+          bold?: boolean;
+          align?: "left" | "center";
+          bgColor?: string;
+          textColor?: string;
+          fontSize?: number;
+          borderColor?: string;
+        },
+      ) => {
+        const bgColor = opts?.bgColor;
+        const textColor = opts?.textColor ?? "#111111";
+        const borderColor = opts?.borderColor ?? "#BFBFBF";
+        const align = opts?.align ?? "left";
+        const fontSize = opts?.fontSize ?? 9;
+        const fontName = opts?.bold ? "Helvetica-Bold" : "Helvetica";
 
-      if (bgColor) {
+        if (bgColor) {
+          doc.save();
+          doc.rect(x, yPos, width, height).fill(bgColor);
+          doc.restore();
+        }
+
         doc.save();
-        doc.rect(x, yPos, width, height).fill(bgColor);
+        doc
+          .lineWidth(0.5)
+          .strokeColor(borderColor)
+          .rect(x, yPos, width, height)
+          .stroke();
         doc.restore();
-      }
 
-      doc.save();
-      doc
-        .lineWidth(0.5)
-        .strokeColor(borderColor)
-        .rect(x, yPos, width, height)
-        .stroke();
-      doc.restore();
+        doc.font(fontName).fontSize(fontSize);
 
-      doc
-        .font(opts?.bold ? "Helvetica-Bold" : "Helvetica")
-        .fontSize(fontSize)
-        .fillColor(textColor)
-        .text(String(text ?? ""), x + paddingX, yPos + paddingY, {
+        const textHeight = doc.heightOfString(String(text ?? ""), {
           width: width - paddingX * 2,
           align,
         });
-    };
+
+        const textY = yPos + Math.max(paddingY, (height - textHeight) / 2);
+
+        doc
+          .font(fontName)
+          .fontSize(fontSize)
+          .fillColor(textColor)
+          .text(String(text ?? ""), x + paddingX, textY, {
+            width: width - paddingX * 2,
+            align,
+          });
+      };
+
 
     const drawTableHeader = () => {
       const headerH = 24;

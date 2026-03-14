@@ -2003,10 +2003,10 @@ export class ReportesController {
       empleado: 178,
       sede: 82,
       tipo: 52,
-      evento: 120,
+      evento: 115,
       metodo: 70,
       excepcion: 100,
-      minTarde: 48,
+      minTarde: 52,
     };
 
     const tableWidth =

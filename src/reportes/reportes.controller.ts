@@ -1265,8 +1265,8 @@ export class ReportesController {
   }
 
   // ==========================
-  // PDF (Resumen)
-  // ==========================
+// PDF (Resumen)
+// ==========================
   @Roles("Gerencia", "RRHH")
   @Get("resumen-pdf")
   async resumenPdf(
@@ -1305,42 +1305,73 @@ export class ReportesController {
       `attachment; filename="reporte_asistencias_resumen.pdf"`,
     );
 
-    const doc = new PDFDocument({
-      margin: 24,
-      size: "A4",
-      layout: "landscape",
-    });
+    const pageConfig = {
+      margin: 26,
+      size: "A4" as const,
+      layout: "landscape" as const,
+    };
+
+    const doc = new PDFDocument(pageConfig);
     doc.pipe(res);
-
-    this.addLogoIfExists(doc, 95, doc.page.margins.left, 16);
-
-    doc
-      .font("Helvetica-Bold")
-      .fontSize(16)
-      .fillColor("#111")
-      .text("Reporte de Asistencias - Resumen", 0, 24, { align: "center" });
-
-    doc.moveDown(1.6);
-    doc.font("Helvetica").fontSize(10).fillColor("#111");
-
-    const periodoTxt = `Periodo: ${this.formatDatePEFromDateOnly(
-      startDate,
-    )} a ${this.formatDatePEFromDateOnly(endDate)}`;
-    const filtrosTxt = `Filtros: usuario=${usuarioLabel} | sede=${sedeLabel}`;
 
     const rows: ResumenRow[] = result.data as ResumenRow[];
 
+    const toNumber = (n: any) => Number(n) || 0;
+    const fmtNum = (n: any) => String(toNumber(n));
+    const fmtHHMM = (n: any) => this.minutosToHHMM(toNumber(n));
+
+    const drawPageHeader = (pageNumber: number) => {
+      this.addLogoIfExists(doc, 82, doc.page.margins.left, 14);
+
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(17)
+        .fillColor("#111111")
+        .text("Reporte de Asistencias - Resumen", 0, 20, {
+          align: "center",
+        });
+
+      doc
+        .font("Helvetica")
+        .fontSize(10)
+        .fillColor("#333333")
+        .text(
+          `Periodo: ${this.formatDatePEFromDateOnly(
+            startDate,
+          )} a ${this.formatDatePEFromDateOnly(endDate)}`,
+          0,
+          48,
+          { align: "center" },
+        );
+
+      doc
+        .font("Helvetica")
+        .fontSize(9)
+        .fillColor("#444444")
+        .text(`Filtros: usuario=${usuarioLabel} | sede=${sedeLabel}`, 0, 64, {
+          align: "center",
+        });
+
+      doc
+        .font("Helvetica")
+        .fontSize(8)
+        .fillColor("#666666")
+        .text(`Página ${pageNumber}`, 0, 20, {
+          align: "right",
+        });
+    };
+
     const col = {
-      rk: 24,
-      usuario: 260,
-      lab: 38,
-      asis: 38,
-      ausi: 40,
-      tard_ing: 42,
-      tard_ref: 42,
-      tard: 46,
-      hhtard: 58,
-      hhsal: 58,
+      rk: 30,
+      usuario: 250,
+      lab: 46,
+      asis: 48,
+      ausi: 50,
+      tardIng: 52,
+      tardRef: 52,
+      tardTot: 56,
+      hhTard: 64,
+      hhAcum: 64,
     };
 
     const tableWidth =
@@ -1349,11 +1380,11 @@ export class ReportesController {
       col.lab +
       col.asis +
       col.ausi +
-      col.tard_ing +
-      col.tard_ref +
-      col.tard +
-      col.hhtard +
-      col.hhsal;
+      col.tardIng +
+      col.tardRef +
+      col.tardTot +
+      col.hhTard +
+      col.hhAcum;
 
     const contentWidth =
       doc.page.width - doc.page.margins.left - doc.page.margins.right;
@@ -1361,152 +1392,299 @@ export class ReportesController {
     const startX =
       doc.page.margins.left + Math.max(0, (contentWidth - tableWidth) / 2);
 
-    const infoY = doc.y;
+    const paddingX = 4;
+    const paddingY = 4;
+    const minRowH = 22;
 
-    doc.text(periodoTxt, startX, infoY, {
-      width: 420,
-      align: "left",
-    });
+    let pageNumber = 1;
+    drawPageHeader(pageNumber);
 
-    doc.text(filtrosTxt, startX, infoY + 18, {
-      width: 620,
-      align: "left",
-    });
+    let y = 100;
 
-    let y = infoY + 42;
+    const getTextHeight = (
+      text: any,
+      width: number,
+      opts?: {
+        bold?: boolean;
+        fontSize?: number;
+        align?: "left" | "center";
+      },
+    ) => {
+      doc
+        .font(opts?.bold ? "Helvetica-Bold" : "Helvetica")
+        .fontSize(opts?.fontSize ?? 9);
 
-    const drawHeader = () => {
-      doc.font("Helvetica-Bold").fontSize(9).fillColor("#111");
-
-      doc.text("Rk", startX, y, { width: col.rk, align: "center" });
-      doc.text("Usuario", startX + col.rk, y, {
-        width: col.usuario,
-        align: "left",
+      return doc.heightOfString(String(text ?? ""), {
+        width: width - paddingX * 2,
+        align: opts?.align ?? "left",
       });
+    };
 
-      let x = startX + col.rk + col.usuario;
+    const drawCell = (
+      text: any,
+      x: number,
+      width: number,
+      yPos: number,
+      height: number,
+      opts?: {
+        bold?: boolean;
+        align?: "left" | "center";
+        bgColor?: string;
+        textColor?: string;
+        fontSize?: number;
+        borderColor?: string;
+      },
+    ) => {
+      const bgColor = opts?.bgColor;
+      const textColor = opts?.textColor ?? "#111111";
+      const borderColor = opts?.borderColor ?? "#BFBFBF";
+      const align = opts?.align ?? "left";
+      const fontSize = opts?.fontSize ?? 9;
 
-      doc.text("Lab.", x, y, { width: col.lab, align: "center" });
-      x += col.lab;
+      if (bgColor) {
+        doc.save();
+        doc.rect(x, yPos, width, height).fill(bgColor);
+        doc.restore();
+      }
 
-      doc.text("Asis.", x, y, { width: col.asis, align: "center" });
-      x += col.asis;
-
-      doc.text("Aus.I", x, y, { width: col.ausi, align: "center" });
-      x += col.ausi;
-
-      doc.text("T.Ing", x, y, { width: col.tard_ing, align: "center" });
-      x += col.tard_ing;
-
-      doc.text("T.Ref", x, y, { width: col.tard_ref, align: "center" });
-      x += col.tard_ref;
-
-      doc.text("T.Total", x, y, { width: col.tard, align: "center" });
-      x += col.tard;
-
-      doc.text("HH:Tard", x, y, { width: col.hhtard, align: "center" });
-      x += col.hhtard;
-
-      doc.text("HH:Acum", x, y, { width: col.hhsal, align: "center" });
+      doc.save();
+      doc
+        .lineWidth(0.5)
+        .strokeColor(borderColor)
+        .rect(x, yPos, width, height)
+        .stroke();
+      doc.restore();
 
       doc
-        .moveTo(startX, y + 14)
-        .lineTo(startX + tableWidth, y + 14)
-        .stroke();
-
-      y += 20;
-      doc.font("Helvetica").fontSize(9).fillColor("#111");
+        .font(opts?.bold ? "Helvetica-Bold" : "Helvetica")
+        .fontSize(fontSize)
+        .fillColor(textColor)
+        .text(String(text ?? ""), x + paddingX, yPos + paddingY, {
+          width: width - paddingX * 2,
+          align,
+        });
     };
 
-    const drawRow = (r: ResumenRow) => {
-      doc.fillColor("#111");
+    const drawTableHeader = () => {
+      const headerH = 24;
+      let x = startX;
 
-      doc.text(String(r.ranking ?? ""), startX, y, {
-        width: col.rk,
+      drawCell("Rk", x, col.rk, y, headerH, {
+        bold: true,
         align: "center",
+        bgColor: "#E9EFF7",
+        fontSize: 9,
       });
+      x += col.rk;
 
-      doc.text(r.usuario, startX + col.rk, y, {
-        width: col.usuario,
+      drawCell("Usuario", x, col.usuario, y, headerH, {
+        bold: true,
         align: "left",
+        bgColor: "#E9EFF7",
+        fontSize: 9,
       });
+      x += col.usuario;
 
-      let x = startX + col.rk + col.usuario;
-
-      doc.text(String(r.dias_laborables ?? 0), x, y, {
-        width: col.lab,
+      drawCell("Lab.", x, col.lab, y, headerH, {
+        bold: true,
         align: "center",
+        bgColor: "#E9EFF7",
+        fontSize: 9,
       });
       x += col.lab;
 
-      doc.text(String(r.dias_con_asistencia ?? 0), x, y, {
-        width: col.asis,
+      drawCell("Asis.", x, col.asis, y, headerH, {
+        bold: true,
         align: "center",
+        bgColor: "#E9EFF7",
+        fontSize: 9,
       });
       x += col.asis;
 
-      doc.text(String(r.ausencias_injustificadas ?? 0), x, y, {
-        width: col.ausi,
+      drawCell("Aus.I", x, col.ausi, y, headerH, {
+        bold: true,
         align: "center",
+        bgColor: "#E9EFF7",
+        fontSize: 9,
       });
       x += col.ausi;
 
-      doc.text(String(r.tardanzas_jornada_in ?? 0), x, y, {
-        width: col.tard_ing,
+      drawCell("T.Ing", x, col.tardIng, y, headerH, {
+        bold: true,
         align: "center",
+        bgColor: "#E9EFF7",
+        fontSize: 9,
       });
-      x += col.tard_ing;
+      x += col.tardIng;
 
-      doc.text(String(r.tardanzas_refrigerio_in ?? 0), x, y, {
-        width: col.tard_ref,
+      drawCell("T.Ref", x, col.tardRef, y, headerH, {
+        bold: true,
         align: "center",
+        bgColor: "#E9EFF7",
+        fontSize: 9,
       });
-      x += col.tard_ref;
+      x += col.tardRef;
 
-      if ((r.tardanzas ?? 0) === 0) doc.fillColor("#16a34a");
-      else if ((r.tardanzas ?? 0) <= 2) doc.fillColor("#d97706");
-      else doc.fillColor("#dc2626");
-
-      doc.text(String(r.tardanzas ?? 0), x, y, {
-        width: col.tard,
+      drawCell("T.Total", x, col.tardTot, y, headerH, {
+        bold: true,
         align: "center",
+        bgColor: "#E9EFF7",
+        fontSize: 9,
       });
+      x += col.tardTot;
 
-      doc.fillColor("#111");
-      x += col.tard;
-
-      doc.text(this.minutosToHHMM(r.minutos_tarde_total ?? 0), x, y, {
-        width: col.hhtard,
+      drawCell("HH:Tard", x, col.hhTard, y, headerH, {
+        bold: true,
         align: "center",
+        bgColor: "#E9EFF7",
+        fontSize: 9,
       });
-      x += col.hhtard;
+      x += col.hhTard;
 
-      doc.text(this.minutosToHHMM(r.minutos_extra_salida ?? 0), x, y, {
-        width: col.hhsal,
+      drawCell("HH:Acum", x, col.hhAcum, y, headerH, {
+        bold: true,
         align: "center",
+        bgColor: "#E9EFF7",
+        fontSize: 9,
       });
 
-      y += 16;
+      y += headerH;
     };
 
-    drawHeader();
+    drawTableHeader();
 
-    for (const r of rows) {
-      if (y > doc.page.height - doc.page.margins.bottom - 20) {
-        doc.addPage({
-          margin: 24,
-          size: "A4",
-          layout: "landscape",
-        });
-        y = doc.page.margins.top;
-        drawHeader();
+    for (const [index, r] of rows.entries()) {
+      const tardanzasTotales = toNumber(r.tardanzas);
+      const rowH = Math.max(
+        minRowH,
+        getTextHeight(fmtNum(r.ranking), col.rk, { align: "center" }) +
+          paddingY * 2,
+        getTextHeight(r.usuario, col.usuario) + paddingY * 2,
+        getTextHeight(fmtNum(r.dias_laborables), col.lab, { align: "center" }) +
+          paddingY * 2,
+        getTextHeight(fmtNum(r.dias_con_asistencia), col.asis, {
+          align: "center",
+        }) +
+          paddingY * 2,
+        getTextHeight(fmtNum(r.ausencias_injustificadas), col.ausi, {
+          align: "center",
+        }) +
+          paddingY * 2,
+        getTextHeight(fmtNum(r.tardanzas_jornada_in), col.tardIng, {
+          align: "center",
+        }) +
+          paddingY * 2,
+        getTextHeight(fmtNum(r.tardanzas_refrigerio_in), col.tardRef, {
+          align: "center",
+        }) +
+          paddingY * 2,
+        getTextHeight(fmtNum(tardanzasTotales), col.tardTot, {
+          align: "center",
+        }) +
+          paddingY * 2,
+        getTextHeight(fmtHHMM(r.minutos_tarde_total), col.hhTard, {
+          align: "center",
+        }) +
+          paddingY * 2,
+        getTextHeight(fmtHHMM(r.minutos_extra_salida), col.hhAcum, {
+          align: "center",
+        }) +
+          paddingY * 2,
+      );
+
+      if (y + rowH > doc.page.height - doc.page.margins.bottom - 18) {
+        doc.addPage(pageConfig);
+        pageNumber += 1;
+        drawPageHeader(pageNumber);
+        y = 100;
+        drawTableHeader();
       }
-      drawRow(r);
+
+      const rowBg = index % 2 === 0 ? "#FFFFFF" : "#F9FBFD";
+
+      let x = startX;
+
+      drawCell(fmtNum(r.ranking), x, col.rk, y, rowH, {
+        align: "center",
+        bgColor: rowBg,
+      });
+      x += col.rk;
+
+      drawCell(r.usuario, x, col.usuario, y, rowH, {
+        align: "left",
+        bgColor: rowBg,
+      });
+      x += col.usuario;
+
+      drawCell(fmtNum(r.dias_laborables), x, col.lab, y, rowH, {
+        align: "center",
+        bgColor: rowBg,
+      });
+      x += col.lab;
+
+      drawCell(fmtNum(r.dias_con_asistencia), x, col.asis, y, rowH, {
+        align: "center",
+        bgColor: rowBg,
+      });
+      x += col.asis;
+
+      drawCell(fmtNum(r.ausencias_injustificadas), x, col.ausi, y, rowH, {
+        align: "center",
+        bgColor: rowBg,
+        textColor: toNumber(r.ausencias_injustificadas) > 0 ? "#C00000" : "#111111",
+        bold: toNumber(r.ausencias_injustificadas) > 0,
+      });
+      x += col.ausi;
+
+      drawCell(fmtNum(r.tardanzas_jornada_in), x, col.tardIng, y, rowH, {
+        align: "center",
+        bgColor: rowBg,
+        textColor: toNumber(r.tardanzas_jornada_in) > 0 ? "#C00000" : "#111111",
+        bold: toNumber(r.tardanzas_jornada_in) > 0,
+      });
+      x += col.tardIng;
+
+      drawCell(fmtNum(r.tardanzas_refrigerio_in), x, col.tardRef, y, rowH, {
+        align: "center",
+        bgColor: rowBg,
+        textColor:
+          toNumber(r.tardanzas_refrigerio_in) > 0 ? "#C00000" : "#111111",
+        bold: toNumber(r.tardanzas_refrigerio_in) > 0,
+      });
+      x += col.tardRef;
+
+      let tardColor = "#16A34A";
+      if (tardanzasTotales > 0 && tardanzasTotales <= 2) tardColor = "#D97706";
+      if (tardanzasTotales > 2) tardColor = "#DC2626";
+
+      drawCell(fmtNum(tardanzasTotales), x, col.tardTot, y, rowH, {
+        align: "center",
+        bgColor: rowBg,
+        textColor: tardColor,
+        bold: tardanzasTotales > 0,
+      });
+      x += col.tardTot;
+
+      drawCell(fmtHHMM(r.minutos_tarde_total), x, col.hhTard, y, rowH, {
+        align: "center",
+        bgColor: rowBg,
+        textColor: toNumber(r.minutos_tarde_total) > 0 ? "#C00000" : "#111111",
+        bold: toNumber(r.minutos_tarde_total) > 0,
+      });
+      x += col.hhTard;
+
+      drawCell(fmtHHMM(r.minutos_extra_salida), x, col.hhAcum, y, rowH, {
+        align: "center",
+        bgColor: rowBg,
+        textColor: toNumber(r.minutos_extra_salida) > 0 ? "#1F4E78" : "#111111",
+        bold: toNumber(r.minutos_extra_salida) > 0,
+      });
+
+      y += rowH;
     }
 
     doc.end();
   }
-
   // ==========================
   // DETALLE - EXCEL
   // ==========================
@@ -1678,6 +1856,21 @@ export class ReportesController {
 
     const fmtNum = (n: any) => String(Number(n) || 0);
 
+    const fmtMetodo = (metodo: string) => {
+      switch ((metodo || "").toLowerCase()) {
+        case "manual_supervisor":
+          return "MANUAL";
+        case "scanner_barras":
+          return "SCANNER";
+        case "qr_fijo":
+          return "QR FIJO";
+        case "qr_dinamico":
+          return "QR DINÁMICO";
+        default:
+          return metodo || "-";
+      }
+    };
+
     const drawPageHeader = (pageNumber: number) => {
       this.addLogoIfExists(doc, 82, doc.page.margins.left, 14);
 
@@ -1720,13 +1913,14 @@ export class ReportesController {
     };
 
     const col = {
-      fecha: 58,
-      hora: 40,
-      empleado: 230,
-      sede: 100,
-      tipo: 58,
-      evento: 190,
-      minTarde: 64,
+      fecha: 54,
+      hora: 38,
+      empleado: 205,
+      sede: 92,
+      tipo: 54,
+      evento: 170,
+      metodo: 78,
+      minTarde: 54,
     };
 
     const tableWidth =
@@ -1736,6 +1930,7 @@ export class ReportesController {
       col.sede +
       col.tipo +
       col.evento +
+      col.metodo +
       col.minTarde;
 
     const contentWidth =
@@ -1800,7 +1995,11 @@ export class ReportesController {
       }
 
       doc.save();
-      doc.lineWidth(0.5).strokeColor(borderColor).rect(x, yPos, width, height).stroke();
+      doc
+        .lineWidth(0.5)
+        .strokeColor(borderColor)
+        .rect(x, yPos, width, height)
+        .stroke();
       doc.restore();
 
       doc
@@ -1865,6 +2064,14 @@ export class ReportesController {
       });
       x += col.evento;
 
+      drawCell("Método", x, col.metodo, y, headerH, {
+        bold: true,
+        align: "center",
+        bgColor: "#E9EFF7",
+        fontSize: 9,
+      });
+      x += col.metodo;
+
       drawCell("Min. tarde", x, col.minTarde, y, headerH, {
         bold: true,
         align: "center",
@@ -1879,6 +2086,9 @@ export class ReportesController {
 
     rows.forEach((r, index) => {
       const minutosTardeMarca = Number(r.minutos_tarde) || 0;
+      const metodoLabel = fmtMetodo(r.metodo);
+      const esManual = (r.metodo || "").toLowerCase() === "manual_supervisor";
+
       const rowH = Math.max(
         minRowH,
         getTextHeight(r.fecha, col.fecha, { align: "center" }) + paddingY * 2,
@@ -1887,7 +2097,9 @@ export class ReportesController {
         getTextHeight(r.sede, col.sede, { align: "center" }) + paddingY * 2,
         getTextHeight(r.tipo, col.tipo, { align: "center" }) + paddingY * 2,
         getTextHeight(r.evento, col.evento) + paddingY * 2,
-        getTextHeight(fmtNum(r.minutos_tarde), col.minTarde, {
+        getTextHeight(metodoLabel, col.metodo, { align: "center" }) +
+          paddingY * 2,
+        getTextHeight(fmtNum(minutosTardeMarca), col.minTarde, {
           align: "center",
         }) + paddingY * 2,
       );
@@ -1939,6 +2151,15 @@ export class ReportesController {
         bgColor: rowBg,
       });
       x += col.evento;
+
+      drawCell(metodoLabel, x, col.metodo, y, rowH, {
+        align: "center",
+        bgColor: rowBg,
+        textColor: esManual ? "#C00000" : "#111111",
+        bold: esManual,
+      });
+      x += col.metodo;
+
       drawCell(fmtNum(minutosTardeMarca), x, col.minTarde, y, rowH, {
         align: "center",
         bgColor: rowBg,
@@ -1950,8 +2171,7 @@ export class ReportesController {
     });
 
     doc.end();
-
-  } 
+}
  // ============================================
   // Reporte maestro usuarios
   // ============================================
@@ -2066,35 +2286,60 @@ export class ReportesController {
       `attachment; filename="reporte_usuarios.pdf"`,
     );
 
-    const doc = new PDFDocument({
-      margin: 36,
-      size: "A4",
-      layout: "landscape",
-    });
+    const pageConfig = {
+      margin: 26,
+      size: "A4" as const,
+      layout: "landscape" as const,
+    };
+
+    const doc = new PDFDocument(pageConfig);
     doc.pipe(res);
 
-    this.addLogoIfExists(doc, 110, doc.page.margins.left, 18);
+    const fechaGeneracion = new Date().toLocaleString("es-PE");
 
-    doc
-      .font("Helvetica-Bold")
-      .fontSize(16)
-      .fillColor("#111")
-      .text("Reporte de Usuarios", 0, 30, { align: "center" });
+    const drawPageHeader = (pageNumber: number) => {
+      this.addLogoIfExists(doc, 82, doc.page.margins.left, 14);
 
-    doc.moveDown(1.4);
-    doc.font("Helvetica").fontSize(10).fillColor("#111");
-    doc.text(`Generado: ${new Date().toLocaleString("es-PE")}`, {
-      align: "center",
-    });
-    doc.moveDown(0.8);
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(17)
+        .fillColor("#111111")
+        .text("Reporte de Usuarios", 0, 20, {
+          align: "center",
+        });
+
+      doc
+        .font("Helvetica")
+        .fontSize(10)
+        .fillColor("#333333")
+        .text(`Generado: ${fechaGeneracion}`, 0, 48, {
+          align: "center",
+        });
+
+      doc
+        .font("Helvetica")
+        .fontSize(9)
+        .fillColor("#444444")
+        .text(`Total de registros: ${rows.length}`, 0, 64, {
+          align: "center",
+        });
+
+      doc
+        .font("Helvetica")
+        .fontSize(8)
+        .fillColor("#666666")
+        .text(`Página ${pageNumber}`, 0, 20, {
+          align: "right",
+        });
+    };
 
     const col = {
-      nombre: 230,
-      tipo: 55,
-      doc: 90,
-      sede: 120,
-      area: 190,
-      tel: 85,
+      nombre: 245,
+      tipo: 58,
+      doc: 92,
+      sede: 100,
+      area: 165,
+      tel: 86,
     };
 
     const tableWidth =
@@ -2106,167 +2351,193 @@ export class ReportesController {
     const startX =
       doc.page.margins.left + Math.max(0, (contentWidth - tableWidth) / 2);
 
-    let y = doc.y;
-
     const paddingX = 4;
-    const paddingY = 5;
+    const paddingY = 4;
     const minRowH = 22;
 
-    const getTextHeight = (text: string, w: number, bold = false) => {
-      doc.font(bold ? "Helvetica-Bold" : "Helvetica").fontSize(9);
+    let pageNumber = 1;
+    drawPageHeader(pageNumber);
+
+    let y = 100;
+
+    const getTextHeight = (
+      text: any,
+      width: number,
+      opts?: {
+        bold?: boolean;
+        fontSize?: number;
+        align?: "left" | "center";
+      },
+    ) => {
+      doc
+        .font(opts?.bold ? "Helvetica-Bold" : "Helvetica")
+        .fontSize(opts?.fontSize ?? 9);
+
       return doc.heightOfString(String(text ?? "-"), {
-        width: w - paddingX * 2,
-        align: "left",
+        width: width - paddingX * 2,
+        align: opts?.align ?? "left",
       });
     };
 
     const drawCell = (
-      text: string,
+      text: any,
       x: number,
-      w: number,
+      width: number,
       yPos: number,
-      h: number,
-      opts?: { bold?: boolean; align?: "left" | "center"; header?: boolean },
+      height: number,
+      opts?: {
+        bold?: boolean;
+        align?: "left" | "center";
+        bgColor?: string;
+        textColor?: string;
+        fontSize?: number;
+        borderColor?: string;
+      },
     ) => {
-      const bold = opts?.bold ?? false;
+      const bgColor = opts?.bgColor;
+      const textColor = opts?.textColor ?? "#111111";
+      const borderColor = opts?.borderColor ?? "#BFBFBF";
       const align = opts?.align ?? "left";
-      const header = opts?.header ?? false;
+      const fontSize = opts?.fontSize ?? 9;
 
-      if (header) {
+      if (bgColor) {
         doc.save();
-        doc.rect(x, yPos, w, h).fill("#f2f2f2");
+        doc.rect(x, yPos, width, height).fill(bgColor);
         doc.restore();
       }
 
+      doc.save();
       doc
-        .save()
-        .lineWidth(0.6)
-        .strokeColor("#888")
-        .rect(x, yPos, w, h)
-        .stroke()
-        .restore();
+        .lineWidth(0.5)
+        .strokeColor(borderColor)
+        .rect(x, yPos, width, height)
+        .stroke();
+      doc.restore();
 
       doc
-        .font(bold ? "Helvetica-Bold" : "Helvetica")
-        .fontSize(9)
-        .fillColor("#111")
+        .font(opts?.bold ? "Helvetica-Bold" : "Helvetica")
+        .fontSize(fontSize)
+        .fillColor(textColor)
         .text(String(text ?? "-"), x + paddingX, yPos + paddingY, {
-          width: w - paddingX * 2,
+          width: width - paddingX * 2,
           align,
         });
     };
 
-    const drawHeader = () => {
-      const h = 24;
-      drawCell("Nombre completo", startX, col.nombre, y, h, {
-        bold: true,
-        header: true,
-      });
-      drawCell("Tipo doc.", startX + col.nombre, col.tipo, y, h, {
-        bold: true,
-        align: "center",
-        header: true,
-      });
-      drawCell("N° documento", startX + col.nombre + col.tipo, col.doc, y, h, {
-        bold: true,
-        align: "center",
-        header: true,
-      });
-      drawCell(
-        "Sede",
-        startX + col.nombre + col.tipo + col.doc,
-        col.sede,
-        y,
-        h,
-        { bold: true, align: "center", header: true },
-      );
-      drawCell(
-        "Área",
-        startX + col.nombre + col.tipo + col.doc + col.sede,
-        col.area,
-        y,
-        h,
-        { bold: true, align: "center", header: true },
-      );
-      drawCell(
-        "Teléfono",
-        startX + col.nombre + col.tipo + col.doc + col.sede + col.area,
-        col.tel,
-        y,
-        h,
-        { bold: true, align: "center", header: true },
-      );
+    const drawTableHeader = () => {
+      const headerH = 24;
+      let x = startX;
 
-      y += h;
+      drawCell("Nombre completo", x, col.nombre, y, headerH, {
+        bold: true,
+        align: "left",
+        bgColor: "#E9EFF7",
+        fontSize: 9,
+      });
+      x += col.nombre;
+
+      drawCell("Tipo doc.", x, col.tipo, y, headerH, {
+        bold: true,
+        align: "center",
+        bgColor: "#E9EFF7",
+        fontSize: 9,
+      });
+      x += col.tipo;
+
+      drawCell("N° documento", x, col.doc, y, headerH, {
+        bold: true,
+        align: "center",
+        bgColor: "#E9EFF7",
+        fontSize: 9,
+      });
+      x += col.doc;
+
+      drawCell("Sede", x, col.sede, y, headerH, {
+        bold: true,
+        align: "center",
+        bgColor: "#E9EFF7",
+        fontSize: 9,
+      });
+      x += col.sede;
+
+      drawCell("Área", x, col.area, y, headerH, {
+        bold: true,
+        align: "center",
+        bgColor: "#E9EFF7",
+        fontSize: 9,
+      });
+      x += col.area;
+
+      drawCell("Teléfono", x, col.tel, y, headerH, {
+        bold: true,
+        align: "center",
+        bgColor: "#E9EFF7",
+        fontSize: 9,
+      });
+
+      y += headerH;
     };
 
-    drawHeader();
+    drawTableHeader();
 
-    for (const r of rows) {
-      const hNombre = getTextHeight(r.nombre_completo, col.nombre);
-      const hTipo = getTextHeight(r.tipo_doc, col.tipo);
-      const hDoc = getTextHeight(r.numero_documento, col.doc);
-      const hSede = getTextHeight(r.sede, col.sede);
-      const hArea = getTextHeight(r.area, col.area);
-      const hTel = getTextHeight(r.telefono, col.tel);
-
+    for (const [index, r] of rows.entries()) {
       const rowH = Math.max(
         minRowH,
-        hNombre + paddingY * 2,
-        hTipo + paddingY * 2,
-        hDoc + paddingY * 2,
-        hSede + paddingY * 2,
-        hArea + paddingY * 2,
-        hTel + paddingY * 2,
+        getTextHeight(r.nombre_completo, col.nombre) + paddingY * 2,
+        getTextHeight(r.tipo_doc, col.tipo, { align: "center" }) + paddingY * 2,
+        getTextHeight(r.numero_documento, col.doc, { align: "center" }) +
+          paddingY * 2,
+        getTextHeight(r.sede, col.sede, { align: "center" }) + paddingY * 2,
+        getTextHeight(r.area, col.area, { align: "center" }) + paddingY * 2,
+        getTextHeight(r.telefono, col.tel, { align: "center" }) + paddingY * 2,
       );
 
-      if (y + rowH > doc.page.height - doc.page.margins.bottom) {
-        doc.addPage();
-        y = doc.page.margins.top;
-        drawHeader();
+      if (y + rowH > doc.page.height - doc.page.margins.bottom - 18) {
+        doc.addPage(pageConfig);
+        pageNumber += 1;
+        drawPageHeader(pageNumber);
+        y = 100;
+        drawTableHeader();
       }
 
-      drawCell(String(r.nombre_completo || "-"), startX, col.nombre, y, rowH);
-      drawCell(
-        String(r.tipo_doc || "-"),
-        startX + col.nombre,
-        col.tipo,
-        y,
-        rowH,
-        { align: "center" },
-      );
-      drawCell(
-        String(r.numero_documento || "-"),
-        startX + col.nombre + col.tipo,
-        col.doc,
-        y,
-        rowH,
-        { align: "center" },
-      );
-      drawCell(
-        String(r.sede || "-"),
-        startX + col.nombre + col.tipo + col.doc,
-        col.sede,
-        y,
-        rowH,
-        { align: "center" },
-      );
-      drawCell(
-        String(r.area || "-"),
-        startX + col.nombre + col.tipo + col.doc + col.sede,
-        col.area,
-        y,
-        rowH,
-        { align: "center" },
-      );
-      drawCell(
-        String(r.telefono || "-"),
-        startX + col.nombre + col.tipo + col.doc + col.sede + col.area,
-        col.tel,
-        y,
-        rowH,
-        { align: "center" },
-      );
+      const rowBg = index % 2 === 0 ? "#FFFFFF" : "#F9FBFD";
+
+      let x = startX;
+
+      drawCell(String(r.nombre_completo || "-"), x, col.nombre, y, rowH, {
+        align: "left",
+        bgColor: rowBg,
+      });
+      x += col.nombre;
+
+      drawCell(String(r.tipo_doc || "-"), x, col.tipo, y, rowH, {
+        align: "center",
+        bgColor: rowBg,
+      });
+      x += col.tipo;
+
+      drawCell(String(r.numero_documento || "-"), x, col.doc, y, rowH, {
+        align: "center",
+        bgColor: rowBg,
+      });
+      x += col.doc;
+
+      drawCell(String(r.sede || "-"), x, col.sede, y, rowH, {
+        align: "center",
+        bgColor: rowBg,
+      });
+      x += col.sede;
+
+      drawCell(String(r.area || "-"), x, col.area, y, rowH, {
+        align: "center",
+        bgColor: rowBg,
+      });
+      x += col.area;
+
+      drawCell(String(r.telefono || "-"), x, col.tel, y, rowH, {
+        align: "center",
+        bgColor: rowBg,
+      });
 
       y += rowH;
     }

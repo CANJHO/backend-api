@@ -379,4 +379,22 @@ export class HorariosService {
 
     return { ok: true };
   }
+    async eliminarExcepcion(id: string) {
+    const existe = await this.ds.query(
+      `SELECT id FROM usuario_excepciones WHERE id = $1 LIMIT 1`,
+      [id],
+    );
+
+    if (!existe.length) {
+      throw new NotFoundException("La excepción no existe");
+    }
+
+    await this.ds.query(
+      `DELETE FROM usuario_excepciones WHERE id = $1`,
+      [id],
+    );
+
+    return { ok: true };
+  }
+
 }

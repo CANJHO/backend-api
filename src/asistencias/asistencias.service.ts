@@ -269,7 +269,7 @@ export class AsistenciasService {
       usuarioId,
       fechaStr,
     );
-    const horario = infoHorario?.horario || null;
+    const horario = infoHorario?.horario_aplicado || infoHorario?.horario || null;
     const excepcion = infoHorario?.excepcion || null;
 
     const esExcepcionNoLaborable =
@@ -415,7 +415,7 @@ export class AsistenciasService {
       usuarioId,
       fechaStr,
     );
-    const horario = infoHorario?.horario || null;
+    const horario = infoHorario?.horario_aplicado || infoHorario?.horario || null;
     const excepcion = infoHorario?.excepcion || null;
 
     const esExcepcionNoLaborable =

@@ -27,39 +27,100 @@ export class HorariosService {
   // ───────────────────────────────────────────────
   async getHorarioDelDia(usuarioId: string, fecha?: string) {
     const f = this.toDate(fecha);
-    const fechaStr = fecha || fechaLimaISO(f); // "YYYY-MM-DD"
+    const fechaStr = fecha || fechaLimaISO(f);
     const d = new Date(`${fechaStr}T00:00:00-05:00`);
-    const jsDow = d.getDay(); // 0=Dom,1=Lun,...6=Sab
+    const jsDow = d.getDay();
     const diaSemana = ((jsDow + 6) % 7) + 1; // 1=Lun ... 7=Dom
 
-    const exc = await this.ds.query(
+    const excRows = await this.ds.query(
       `SELECT * 
-         FROM usuario_excepciones
-        WHERE usuario_id = $1 AND fecha = $2`,
-      [usuarioId, fechaLimaISO(f)],
+        FROM usuario_excepciones
+        WHERE usuario_id = $1
+          AND fecha = $2::date
+        LIMIT 1`,
+      [usuarioId, fechaStr],
     );
 
-    const excepcion = exc[0] || null;
+    const excepcion = excRows[0] || null;
 
-    // HORARIO VIGENTE
-    const rows = await this.ds.query(
+    const horarioRows = await this.ds.query(
       `SELECT *
-         FROM usuario_horarios
+        FROM usuario_horarios
         WHERE usuario_id = $1
           AND dia_semana = $2
           AND fecha_inicio <= $3::date
           AND (fecha_fin IS NULL OR fecha_fin >= $3::date)
         ORDER BY creado_en DESC
         LIMIT 1`,
-      [usuarioId, diaSemana, fechaLimaISO(f)],
+      [usuarioId, diaSemana, fechaStr],
     );
 
-    const horario = rows[0] || null;
+    const horarioBase = horarioRows[0] || null;
+
+    let horarioAplicado = horarioBase
+      ? { ...horarioBase, origen: "HORARIO_BASE" }
+      : null;
+
+    if (excepcion) {
+      const tipo = String(excepcion.tipo || "").toUpperCase();
+
+      if (tipo === "DESCANSO_ESPECIAL") {
+        horarioAplicado = {
+          ...(horarioBase || {}),
+          usuario_id: usuarioId,
+          dia_semana: diaSemana,
+          hora_inicio: null,
+          hora_fin: null,
+          hora_inicio_2: null,
+          hora_fin_2: null,
+          es_descanso: true,
+          tolerancia_min: horarioBase?.tolerancia_min ?? 15,
+          fecha_inicio: fechaStr,
+          fecha_fin: fechaStr,
+          origen: "DESCANSO_ESPECIAL",
+        };
+      }
+
+      if (tipo === "HORARIO_ESPECIAL") {
+        horarioAplicado = {
+          ...(horarioBase || {}),
+          usuario_id: usuarioId,
+          dia_semana: diaSemana,
+          hora_inicio: excepcion.hora_inicio,
+          hora_fin: excepcion.hora_fin,
+          hora_inicio_2: null,
+          hora_fin_2: null,
+          es_descanso: false,
+          tolerancia_min: horarioBase?.tolerancia_min ?? 15,
+          fecha_inicio: fechaStr,
+          fecha_fin: fechaStr,
+          origen: "HORARIO_ESPECIAL",
+        };
+      }
+
+      if (tipo === "LABORABLE_EN_DESCANSO") {
+        horarioAplicado = {
+          ...(horarioBase || {}),
+          usuario_id: usuarioId,
+          dia_semana: diaSemana,
+          hora_inicio: excepcion.hora_inicio,
+          hora_fin: excepcion.hora_fin,
+          hora_inicio_2: null,
+          hora_fin_2: null,
+          es_descanso: false,
+          tolerancia_min: horarioBase?.tolerancia_min ?? 15,
+          fecha_inicio: fechaStr,
+          fecha_fin: fechaStr,
+          origen: "LABORABLE_EN_DESCANSO",
+        };
+      }
+    }
 
     return {
-      fecha: fechaLimaISO(f),
+      fecha: fechaStr,
       dia_semana: diaSemana,
-      horario,
+      horario: horarioBase,
+      horario_aplicado: horarioAplicado,
       excepcion,
     };
   }
@@ -250,11 +311,24 @@ export class HorariosService {
       throw new BadRequestException("Falta fecha o tipo");
     }
 
-    // evitar duplicados
+    const tipo = String(e.tipo || "").toUpperCase().trim();
+    const tiposValidos = [
+      "HORARIO_ESPECIAL",
+      "DESCANSO_ESPECIAL",
+      "LABORABLE_EN_DESCANSO",
+    ];
+
+    if (!tiposValidos.includes(tipo)) {
+      throw new BadRequestException(
+        `Tipo de excepción inválido. Use: ${tiposValidos.join(", ")}`,
+      );
+    }
+
     const exists = await this.ds.query(
       `SELECT id
-         FROM usuario_excepciones
-        WHERE usuario_id = $1 AND fecha = $2`,
+        FROM usuario_excepciones
+        WHERE usuario_id = $1
+          AND fecha = $2::date`,
       [usuarioId, e.fecha],
     );
 
@@ -262,26 +336,47 @@ export class HorariosService {
       throw new BadRequestException("Ya existe excepción para esta fecha");
     }
 
+    let es_laborable = e.es_laborable;
+    let hora_inicio = e.hora_inicio || null;
+    let hora_fin = e.hora_fin || null;
+
+    if (tipo === "DESCANSO_ESPECIAL") {
+      es_laborable = false;
+      hora_inicio = null;
+      hora_fin = null;
+    }
+
+    if (tipo === "HORARIO_ESPECIAL" || tipo === "LABORABLE_EN_DESCANSO") {
+      es_laborable = true;
+
+      if (!hora_inicio || !hora_fin) {
+        throw new BadRequestException(
+          `${tipo} requiere hora_inicio y hora_fin`,
+        );
+      }
+
+      if (hora_inicio >= hora_fin) {
+        throw new BadRequestException(
+          "La hora_inicio debe ser menor que hora_fin",
+        );
+      }
+    }
+
     await this.ds.query(
       `INSERT INTO usuario_excepciones
         (usuario_id, fecha, tipo, es_laborable, hora_inicio, hora_fin, observacion)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      VALUES ($1,$2,$3,$4,$5,$6,$7)`,
       [
         usuarioId,
         e.fecha,
-        e.tipo,
-        e.es_laborable,
-        e.hora_inicio || null,
-        e.hora_fin || null,
+        tipo,
+        es_laborable,
+        hora_inicio,
+        hora_fin,
         e.observacion || null,
       ],
     );
 
-    return { ok: true };
-  }
-
-  async eliminarExcepcion(id: string) {
-    await this.ds.query(`DELETE FROM usuario_excepciones WHERE id=$1`, [id]);
     return { ok: true };
   }
 }

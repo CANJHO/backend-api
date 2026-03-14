@@ -43,6 +43,7 @@ type ResumenRow = {
   ausencias_injustificadas: number;
 
   horario_vigente_desde: string | null;
+  total_excepciones: number;
 
   ranking?: number;
 };
@@ -59,6 +60,9 @@ type DetalleAnaliticoRow = {
   minutos_tarde: number;
   metodo: string;
   estado_validacion: string;
+
+  excepcion_tipo: string;
+  excepcion_observacion: string;
 
   min_tarde_jornada_in: number;
   min_tarde_refrigerio_in: number;
@@ -525,11 +529,17 @@ export class ReportesController {
           COALESCE(a.metodo, '') AS metodo,
           COALESCE(a.estado_validacion, '') AS estado_validacion,
 
+          COALESCE(ue.tipo, '') AS excepcion_tipo,
+          COALESCE(ue.observacion, '') AS excepcion_observacion,
+
           h.hora_salida_programada
         FROM asistencias a
         JOIN usuarios u ON u.id = a.usuario_id
         LEFT JOIN sedes s ON s.id = u.sede_id
         LEFT JOIN areas ar ON ar.id = u.area_id
+        LEFT JOIN usuario_excepciones ue
+          ON ue.usuario_id = a.usuario_id
+         AND ue.fecha = a.fecha_hora::date
         LEFT JOIN LATERAL (
           SELECT
             CASE
@@ -594,6 +604,8 @@ export class ReportesController {
         b.minutos_tarde,
         b.metodo,
         b.estado_validacion,
+        b.excepcion_tipo,
+        b.excepcion_observacion,
 
         COALESCE(d.min_tarde_jornada_in, 0) AS min_tarde_jornada_in,
         COALESCE(d.min_tarde_refrigerio_in, 0) AS min_tarde_refrigerio_in,
@@ -627,6 +639,9 @@ export class ReportesController {
       minutos_tarde: Number(r.minutos_tarde) || 0,
       metodo: r.metodo || "",
       estado_validacion: r.estado_validacion || "",
+
+      excepcion_tipo: r.excepcion_tipo || "",
+      excepcion_observacion: r.excepcion_observacion || "",
 
       min_tarde_jornada_in: Number(r.min_tarde_jornada_in) || 0,
       min_tarde_refrigerio_in: Number(r.min_tarde_refrigerio_in) || 0,
@@ -816,8 +831,18 @@ export class ReportesController {
         ) h ON TRUE
       ),
       exc AS (
-        SELECT usuario_id, fecha, es_laborable
+        SELECT usuario_id, fecha, es_laborable, tipo
         FROM usuario_excepciones
+      ),
+      exc_count AS (
+        SELECT
+          e.usuario_id,
+          COUNT(*) AS total_excepciones
+        FROM usuario_excepciones e
+        JOIN usuarios_filtrados uf ON uf.id = e.usuario_id
+        WHERE e.fecha >= $1::date
+          AND e.fecha <= $2::date
+        GROUP BY e.usuario_id
       ),
       asis_dia AS (
         SELECT
@@ -849,6 +874,7 @@ export class ReportesController {
             )
           ) AS es_feriado,
           e.es_laborable AS exc_es_laborable,
+          e.tipo AS exc_tipo,
           COALESCE(ad.marcas, 0) > 0 AS tiene_asistencia
         FROM cal_hor c
         LEFT JOIN exc e
@@ -897,8 +923,11 @@ export class ReportesController {
             AND (cf.exc_es_laborable IS NULL OR cf.exc_es_laborable = TRUE)
         ) AS ausencias_injustificadas,
 
-        MIN(cf.horario_vigente_desde)::text AS horario_vigente_desde
+        MIN(cf.horario_vigente_desde)::text AS horario_vigente_desde,
+        COALESCE(MAX(ec.total_excepciones), 0) AS total_excepciones
       FROM cal_final cf
+      LEFT JOIN exc_count ec
+        ON ec.usuario_id = cf.usuario_id
       GROUP BY cf.usuario_id
       `,
       ausParams,
@@ -933,6 +962,7 @@ export class ReportesController {
         ausencias_injustificadas: 0,
 
         horario_vigente_desde: null,
+        total_excepciones: 0,
       });
     }
 
@@ -965,6 +995,7 @@ export class ReportesController {
           ausencias_injustificadas: 0,
 
           horario_vigente_desde: null,
+          total_excepciones: 0,
         } as ResumenRow);
 
       existing.dias_laborables = Number(a.dias_laborables) || 0;
@@ -974,6 +1005,7 @@ export class ReportesController {
       existing.ausencias_injustificadas =
         Number(a.ausencias_injustificadas) || 0;
       existing.horario_vigente_desde = a.horario_vigente_desde ?? null;
+      existing.total_excepciones = Number(a.total_excepciones) || 0;
 
       map.set(a.usuario_id, existing);
     }
@@ -1078,11 +1110,8 @@ export class ReportesController {
       { header: "Días feriados", key: "dias_feriados", width: 12 },
       { header: "Días con asistencia", key: "dias_con_asistencia", width: 16 },
       { header: "Ausencias just.", key: "ausencias_justificadas", width: 14 },
-      {
-        header: "Ausencias injust.",
-        key: "ausencias_injustificadas",
-        width: 16,
-      },
+      { header: "Ausencias injust.", key: "ausencias_injustificadas", width: 16 },
+      { header: "Excepciones", key: "total_excepciones", width: 12 },
 
       {
         header: "Horario vigente desde",
@@ -1121,6 +1150,7 @@ export class ReportesController {
         dias_con_asistencia: r.dias_con_asistencia,
         ausencias_justificadas: r.ausencias_justificadas,
         ausencias_injustificadas: r.ausencias_injustificadas,
+        total_excepciones: r.total_excepciones,
 
         horario_vigente_desde: r.horario_vigente_desde,
         primer_ingreso: r.primer_ingreso,
@@ -1265,8 +1295,8 @@ export class ReportesController {
   }
 
   // ==========================
-// PDF (Resumen)
-// ==========================
+  // PDF (Resumen)
+  // ==========================
   @Roles("Gerencia", "RRHH")
   @Get("resumen-pdf")
   async resumenPdf(
@@ -1362,16 +1392,17 @@ export class ReportesController {
     };
 
     const col = {
-      rk: 30,
-      usuario: 250,
-      lab: 46,
-      asis: 48,
-      ausi: 50,
-      tardIng: 52,
-      tardRef: 52,
-      tardTot: 56,
-      hhTard: 64,
-      hhAcum: 64,
+      rk: 28,
+      usuario: 228,
+      lab: 42,
+      asis: 46,
+      ausi: 48,
+      exc: 40,
+      tardIng: 48,
+      tardRef: 48,
+      tardTot: 52,
+      hhTard: 60,
+      hhAcum: 60,
     };
 
     const tableWidth =
@@ -1380,6 +1411,7 @@ export class ReportesController {
       col.lab +
       col.asis +
       col.ausi +
+      col.exc +
       col.tardIng +
       col.tardRef +
       col.tardTot +
@@ -1509,6 +1541,14 @@ export class ReportesController {
       });
       x += col.ausi;
 
+      drawCell("Exc.", x, col.exc, y, headerH, {
+        bold: true,
+        align: "center",
+        bgColor: "#E9EFF7",
+        fontSize: 9,
+      });
+      x += col.exc;
+
       drawCell("T.Ing", x, col.tardIng, y, headerH, {
         bold: true,
         align: "center",
@@ -1567,6 +1607,10 @@ export class ReportesController {
         }) +
           paddingY * 2,
         getTextHeight(fmtNum(r.ausencias_injustificadas), col.ausi, {
+          align: "center",
+        }) +
+          paddingY * 2,
+        getTextHeight(fmtNum(r.total_excepciones), col.exc, {
           align: "center",
         }) +
           paddingY * 2,
@@ -1631,10 +1675,19 @@ export class ReportesController {
       drawCell(fmtNum(r.ausencias_injustificadas), x, col.ausi, y, rowH, {
         align: "center",
         bgColor: rowBg,
-        textColor: toNumber(r.ausencias_injustificadas) > 0 ? "#C00000" : "#111111",
+        textColor:
+          toNumber(r.ausencias_injustificadas) > 0 ? "#C00000" : "#111111",
         bold: toNumber(r.ausencias_injustificadas) > 0,
       });
       x += col.ausi;
+
+      drawCell(fmtNum(r.total_excepciones), x, col.exc, y, rowH, {
+        align: "center",
+        bgColor: rowBg,
+        textColor: toNumber(r.total_excepciones) > 0 ? "#7F6000" : "#111111",
+        bold: toNumber(r.total_excepciones) > 0,
+      });
+      x += col.exc;
 
       drawCell(fmtNum(r.tardanzas_jornada_in), x, col.tardIng, y, rowH, {
         align: "center",
@@ -1685,6 +1738,7 @@ export class ReportesController {
 
     doc.end();
   }
+
   // ==========================
   // DETALLE - EXCEL
   // ==========================
@@ -1719,6 +1773,8 @@ export class ReportesController {
       { header: "Sede", key: "sede", width: 18 },
       { header: "Evento", key: "evento", width: 22 },
       { header: "Tipo", key: "tipo", width: 10 },
+      { header: "Excepción", key: "excepcion_tipo", width: 22 },
+      { header: "Observación excepción", key: "excepcion_observacion", width: 32 },
 
       { header: "Min. tarde marca", key: "minutos_tarde", width: 14 },
       { header: "Min. tard. ingreso", key: "min_tarde_jornada_in", width: 16 },
@@ -1760,6 +1816,14 @@ export class ReportesController {
       horizontal: "left",
       vertical: "middle",
     };
+    ws.getColumn("excepcion_tipo").alignment = {
+      horizontal: "center",
+      vertical: "middle",
+    };
+    ws.getColumn("excepcion_observacion").alignment = {
+      horizontal: "left",
+      vertical: "middle",
+    };
     ws.getColumn("sede").alignment = {
       horizontal: "center",
       vertical: "middle",
@@ -1782,6 +1846,7 @@ export class ReportesController {
       const minMarca = Number(row.getCell("minutos_tarde").value || 0);
       const tardDia = Number(row.getCell("tardanzas_dia").value || 0);
       const minAcum = Number(row.getCell("minutos_acumulados").value || 0);
+      const excTipo = String(row.getCell("excepcion_tipo").value || "");
 
       if (minMarca > 0) {
         row.getCell("minutos_tarde").font = {
@@ -1804,6 +1869,13 @@ export class ReportesController {
         };
         row.getCell("horas_acumuladas").font = {
           color: { argb: "1F4E78" },
+          bold: true,
+        };
+      }
+
+      if (excTipo) {
+        row.getCell("excepcion_tipo").font = {
+          color: { argb: "7F6000" },
           bold: true,
         };
       }
@@ -1871,6 +1943,19 @@ export class ReportesController {
       }
     };
 
+    const fmtExcepcion = (tipo: string) => {
+      switch ((tipo || "").toUpperCase()) {
+        case "HORARIO_ESPECIAL":
+          return "HORARIO ESPECIAL";
+        case "DESCANSO_ESPECIAL":
+          return "DESCANSO ESPECIAL";
+        case "LABORABLE_EN_DESCANSO":
+          return "LABORABLE EN DESCANSO";
+        default:
+          return tipo || "-";
+      }
+    };
+
     const drawPageHeader = (pageNumber: number) => {
       this.addLogoIfExists(doc, 82, doc.page.margins.left, 14);
 
@@ -1913,14 +1998,15 @@ export class ReportesController {
     };
 
     const col = {
-      fecha: 54,
-      hora: 38,
-      empleado: 205,
-      sede: 92,
-      tipo: 54,
-      evento: 170,
-      metodo: 78,
-      minTarde: 54,
+      fecha: 50,
+      hora: 36,
+      empleado: 180,
+      sede: 82,
+      tipo: 48,
+      evento: 140,
+      metodo: 70,
+      excepcion: 100,
+      minTarde: 48,
     };
 
     const tableWidth =
@@ -1931,6 +2017,7 @@ export class ReportesController {
       col.tipo +
       col.evento +
       col.metodo +
+      col.excepcion +
       col.minTarde;
 
     const contentWidth =
@@ -2072,6 +2159,14 @@ export class ReportesController {
       });
       x += col.metodo;
 
+      drawCell("Excepción", x, col.excepcion, y, headerH, {
+        bold: true,
+        align: "center",
+        bgColor: "#E9EFF7",
+        fontSize: 9,
+      });
+      x += col.excepcion;
+
       drawCell("Min. tarde", x, col.minTarde, y, headerH, {
         bold: true,
         align: "center",
@@ -2088,6 +2183,7 @@ export class ReportesController {
       const minutosTardeMarca = Number(r.minutos_tarde) || 0;
       const metodoLabel = fmtMetodo(r.metodo);
       const esManual = (r.metodo || "").toLowerCase() === "manual_supervisor";
+      const excepcionLabel = fmtExcepcion(r.excepcion_tipo);
 
       const rowH = Math.max(
         minRowH,
@@ -2099,9 +2195,12 @@ export class ReportesController {
         getTextHeight(r.evento, col.evento) + paddingY * 2,
         getTextHeight(metodoLabel, col.metodo, { align: "center" }) +
           paddingY * 2,
+        getTextHeight(excepcionLabel, col.excepcion, { align: "center" }) +
+          paddingY * 2,
         getTextHeight(fmtNum(minutosTardeMarca), col.minTarde, {
           align: "center",
-        }) + paddingY * 2,
+        }) +
+          paddingY * 2,
       );
 
       if (y + rowH > doc.page.height - doc.page.margins.bottom - 18) {
@@ -2160,6 +2259,14 @@ export class ReportesController {
       });
       x += col.metodo;
 
+      drawCell(excepcionLabel, x, col.excepcion, y, rowH, {
+        align: "center",
+        bgColor: rowBg,
+        textColor: r.excepcion_tipo ? "#7F6000" : "#111111",
+        bold: !!r.excepcion_tipo,
+      });
+      x += col.excepcion;
+
       drawCell(fmtNum(minutosTardeMarca), x, col.minTarde, y, rowH, {
         align: "center",
         bgColor: rowBg,
@@ -2171,8 +2278,9 @@ export class ReportesController {
     });
 
     doc.end();
-}
- // ============================================
+  }
+
+  // ============================================
   // Reporte maestro usuarios
   // ============================================
   @Roles("Gerencia", "RRHH")

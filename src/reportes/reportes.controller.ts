@@ -1668,7 +1668,7 @@ export class ReportesController {
     );
 
     const pageConfig = {
-      margin: 24,
+      margin: 26,
       size: "A4" as const,
       layout: "landscape" as const,
     };
@@ -1720,13 +1720,13 @@ export class ReportesController {
     };
 
     const col = {
-      fecha: 62,
-      hora: 42,
-      empleado: 255,
-      sede: 110,
-      tipo: 62,
-      evento: 205,
-      minTarde: 72,
+      fecha: 58,
+      hora: 40,
+      empleado: 230,
+      sede: 100,
+      tipo: 58,
+      evento: 190,
+      minTarde: 64,
     };
 
     const tableWidth =
@@ -1751,7 +1751,7 @@ export class ReportesController {
     let pageNumber = 1;
     drawPageHeader(pageNumber);
 
-    let y = 95;
+    let y = 100;
 
     const getTextHeight = (
       text: any,
@@ -1878,6 +1878,7 @@ export class ReportesController {
     drawTableHeader();
 
     rows.forEach((r, index) => {
+      const minutosTardeMarca = Number(r.minutos_tarde) || 0;
       const rowH = Math.max(
         minRowH,
         getTextHeight(r.fecha, col.fecha, { align: "center" }) + paddingY * 2,
@@ -1895,7 +1896,7 @@ export class ReportesController {
         doc.addPage(pageConfig);
         pageNumber += 1;
         drawPageHeader(pageNumber);
-        y = 95;
+        y = 100;
         drawTableHeader();
       }
 
@@ -1938,12 +1939,11 @@ export class ReportesController {
         bgColor: rowBg,
       });
       x += col.evento;
-
-      drawCell(fmtNum(r.minutos_tarde), x, col.minTarde, y, rowH, {
+      drawCell(fmtNum(minutosTardeMarca), x, col.minTarde, y, rowH, {
         align: "center",
         bgColor: rowBg,
-        textColor: r.minutos_tarde > 0 ? "#C00000" : "#111111",
-        bold: r.minutos_tarde > 0,
+        textColor: minutosTardeMarca > 0 ? "#C00000" : "#111111",
+        bold: minutosTardeMarca > 0,
       });
 
       y += rowH;

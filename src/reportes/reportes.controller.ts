@@ -1998,12 +1998,12 @@ export class ReportesController {
     };
 
     const col = {
-      fecha: 53,
-      hora: 36,
-      empleado: 180,
+      fecha: 64,
+      hora: 38,
+      empleado: 178,
       sede: 82,
-      tipo: 50,
-      evento: 135,
+      tipo: 46,
+      evento: 126,
       metodo: 70,
       excepcion: 100,
       minTarde: 48,

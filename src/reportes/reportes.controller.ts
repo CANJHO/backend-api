@@ -1668,53 +1668,65 @@ export class ReportesController {
     );
 
     const pageConfig = {
-      margin: 20,
-      size: "TABLOID" as const,
+      margin: 24,
+      size: "A4" as const,
       layout: "landscape" as const,
     };
 
     const doc = new PDFDocument(pageConfig);
     doc.pipe(res);
 
-    const drawPageTitle = () => {
-      this.addLogoIfExists(doc, 88, doc.page.margins.left, 12);
+    const fmtNum = (n: any) => String(Number(n) || 0);
+
+    const drawPageHeader = (pageNumber: number) => {
+      this.addLogoIfExists(doc, 82, doc.page.margins.left, 14);
 
       doc
         .font("Helvetica-Bold")
-        .fontSize(15)
-        .fillColor("#111")
-        .text("Asistencia - Detalle de marcajes", 0, 22, { align: "center" });
+        .fontSize(17)
+        .fillColor("#111111")
+        .text("Asistencia - Detalle de marcajes", 0, 20, {
+          align: "center",
+        });
 
-      doc.moveDown(1.0);
-      doc.font("Helvetica").fontSize(9).fillColor("#222");
+      doc
+        .font("Helvetica")
+        .fontSize(10)
+        .fillColor("#333333")
+        .text(
+          `Periodo: ${this.formatDatePEFromDateOnly(
+            desde!,
+          )} a ${this.formatDatePEFromDateOnly(hasta!)}`,
+          0,
+          48,
+          { align: "center" },
+        );
 
-      const periodoTxt = `Periodo: ${this.formatDatePEFromDateOnly(
-        desde!,
-      )} a ${this.formatDatePEFromDateOnly(hasta!)}`;
-      const filtrosTxt = `Filtros: usuario=${usuarioLabel} | sede=${sedeLabel}`;
+      doc
+        .font("Helvetica")
+        .fontSize(9)
+        .fillColor("#444444")
+        .text(`Filtros: usuario=${usuarioLabel} | sede=${sedeLabel}`, 0, 64, {
+          align: "center",
+        });
 
-      doc.text(periodoTxt, { align: "center" });
-      doc.text(filtrosTxt, { align: "center" });
-      doc.moveDown(0.7);
+      doc
+        .font("Helvetica")
+        .fontSize(8)
+        .fillColor("#666666")
+        .text(`Página ${pageNumber}`, 0, 20, {
+          align: "right",
+        });
     };
 
-    const fmtNum = (n: any) => String(Number(n) || 0);
-    const fmtDec = (n: any) => (Number(n) || 0).toFixed(2);
-
-    drawPageTitle();
-
     const col = {
-      fecha: 55,
-      hora: 38,
-      empleado: 170,
-      sede: 85,
-      area: 92,
-      evento: 145,
-      minMarca: 42,
-      tardDia: 42,
-      minAcum: 46,
-      horasAcum: 48,
-      estado: 62,
+      fecha: 62,
+      hora: 42,
+      empleado: 255,
+      sede: 110,
+      tipo: 62,
+      evento: 205,
+      minTarde: 72,
     };
 
     const tableWidth =
@@ -1722,13 +1734,9 @@ export class ReportesController {
       col.hora +
       col.empleado +
       col.sede +
-      col.area +
+      col.tipo +
       col.evento +
-      col.minMarca +
-      col.tardDia +
-      col.minAcum +
-      col.horasAcum +
-      col.estado;
+      col.minTarde;
 
     const contentWidth =
       doc.page.width - doc.page.margins.left - doc.page.margins.right;
@@ -1736,223 +1744,215 @@ export class ReportesController {
     const startX =
       doc.page.margins.left + Math.max(0, (contentWidth - tableWidth) / 2);
 
-    let y = doc.y;
+    const paddingX = 4;
+    const paddingY = 4;
+    const minRowH = 22;
 
-    const paddingX = 3;
-    const paddingY = 3;
-    const minRowH = 18;
+    let pageNumber = 1;
+    drawPageHeader(pageNumber);
 
-    const getTextHeight = (text: any, w: number, bold = false) => {
-      doc.font(bold ? "Helvetica-Bold" : "Helvetica").fontSize(7.6);
+    let y = 95;
+
+    const getTextHeight = (
+      text: any,
+      width: number,
+      opts?: {
+        bold?: boolean;
+        fontSize?: number;
+        align?: "left" | "center";
+      },
+    ) => {
+      doc
+        .font(opts?.bold ? "Helvetica-Bold" : "Helvetica")
+        .fontSize(opts?.fontSize ?? 9);
+
       return doc.heightOfString(String(text ?? ""), {
-        width: w - paddingX * 2,
-        align: "left",
+        width: width - paddingX * 2,
+        align: opts?.align ?? "left",
       });
     };
 
     const drawCell = (
       text: any,
       x: number,
-      w: number,
+      width: number,
       yPos: number,
-      h: number,
+      height: number,
       opts?: {
         bold?: boolean;
         align?: "left" | "center";
-        header?: boolean;
+        bgColor?: string;
         textColor?: string;
+        fontSize?: number;
+        borderColor?: string;
       },
     ) => {
-      const bold = opts?.bold ?? false;
+      const bgColor = opts?.bgColor;
+      const textColor = opts?.textColor ?? "#111111";
+      const borderColor = opts?.borderColor ?? "#BFBFBF";
       const align = opts?.align ?? "left";
-      const header = opts?.header ?? false;
-      const textColor = opts?.textColor ?? "#111";
+      const fontSize = opts?.fontSize ?? 9;
 
-      if (header) {
+      if (bgColor) {
         doc.save();
-        doc.rect(x, yPos, w, h).fill("#E9EFF7");
+        doc.rect(x, yPos, width, height).fill(bgColor);
         doc.restore();
       }
 
-      doc
-        .save()
-        .lineWidth(0.4)
-        .strokeColor("#A6A6A6")
-        .rect(x, yPos, w, h)
-        .stroke()
-        .restore();
+      doc.save();
+      doc.lineWidth(0.5).strokeColor(borderColor).rect(x, yPos, width, height).stroke();
+      doc.restore();
 
       doc
-        .font(bold ? "Helvetica-Bold" : "Helvetica")
-        .fontSize(7.6)
+        .font(opts?.bold ? "Helvetica-Bold" : "Helvetica")
+        .fontSize(fontSize)
         .fillColor(textColor)
         .text(String(text ?? ""), x + paddingX, yPos + paddingY, {
-          width: w - paddingX * 2,
+          width: width - paddingX * 2,
           align,
         });
     };
 
-    const drawHeader = () => {
-      const h = 21;
+    const drawTableHeader = () => {
+      const headerH = 24;
       let x = startX;
 
-      drawCell("Fecha", x, col.fecha, y, h, {
+      drawCell("Fecha", x, col.fecha, y, headerH, {
         bold: true,
-        header: true,
         align: "center",
+        bgColor: "#E9EFF7",
+        fontSize: 9,
       });
       x += col.fecha;
 
-      drawCell("Hora", x, col.hora, y, h, {
+      drawCell("Hora", x, col.hora, y, headerH, {
         bold: true,
-        header: true,
         align: "center",
+        bgColor: "#E9EFF7",
+        fontSize: 9,
       });
       x += col.hora;
 
-      drawCell("Empleado", x, col.empleado, y, h, {
+      drawCell("Empleado", x, col.empleado, y, headerH, {
         bold: true,
-        header: true,
+        align: "left",
+        bgColor: "#E9EFF7",
+        fontSize: 9,
       });
       x += col.empleado;
 
-      drawCell("Sede", x, col.sede, y, h, {
+      drawCell("Sede", x, col.sede, y, headerH, {
         bold: true,
-        header: true,
         align: "center",
+        bgColor: "#E9EFF7",
+        fontSize: 9,
       });
       x += col.sede;
 
-      drawCell("Área", x, col.area, y, h, {
+      drawCell("Tipo", x, col.tipo, y, headerH, {
         bold: true,
-        header: true,
         align: "center",
+        bgColor: "#E9EFF7",
+        fontSize: 9,
       });
-      x += col.area;
+      x += col.tipo;
 
-      drawCell("Evento", x, col.evento, y, h, {
+      drawCell("Evento", x, col.evento, y, headerH, {
         bold: true,
-        header: true,
+        align: "left",
+        bgColor: "#E9EFF7",
+        fontSize: 9,
       });
       x += col.evento;
 
-      drawCell("Min.T", x, col.minMarca, y, h, {
+      drawCell("Min. tarde", x, col.minTarde, y, headerH, {
         bold: true,
-        header: true,
         align: "center",
-      });
-      x += col.minMarca;
-
-      drawCell("T.Día", x, col.tardDia, y, h, {
-        bold: true,
-        header: true,
-        align: "center",
-      });
-      x += col.tardDia;
-
-      drawCell("M.Acum", x, col.minAcum, y, h, {
-        bold: true,
-        header: true,
-        align: "center",
-      });
-      x += col.minAcum;
-
-      drawCell("H.Acum", x, col.horasAcum, y, h, {
-        bold: true,
-        header: true,
-        align: "center",
-      });
-      x += col.horasAcum;
-
-      drawCell("Estado", x, col.estado, y, h, {
-        bold: true,
-        header: true,
-        align: "center",
+        bgColor: "#E9EFF7",
+        fontSize: 9,
       });
 
-      y += h;
+      y += headerH;
     };
 
-    drawHeader();
+    drawTableHeader();
 
-    for (const r of rows) {
+    rows.forEach((r, index) => {
       const rowH = Math.max(
         minRowH,
-        getTextHeight(r.fecha, col.fecha) + paddingY * 2,
-        getTextHeight(r.hora, col.hora) + paddingY * 2,
+        getTextHeight(r.fecha, col.fecha, { align: "center" }) + paddingY * 2,
+        getTextHeight(r.hora, col.hora, { align: "center" }) + paddingY * 2,
         getTextHeight(r.empleado, col.empleado) + paddingY * 2,
-        getTextHeight(r.sede, col.sede) + paddingY * 2,
-        getTextHeight(r.area, col.area) + paddingY * 2,
+        getTextHeight(r.sede, col.sede, { align: "center" }) + paddingY * 2,
+        getTextHeight(r.tipo, col.tipo, { align: "center" }) + paddingY * 2,
         getTextHeight(r.evento, col.evento) + paddingY * 2,
-        getTextHeight(fmtNum(r.minutos_tarde), col.minMarca) + paddingY * 2,
-        getTextHeight(fmtNum(r.tardanzas_dia), col.tardDia) + paddingY * 2,
-        getTextHeight(fmtNum(r.minutos_acumulados), col.minAcum) + paddingY * 2,
-        getTextHeight(fmtDec(r.horas_acumuladas), col.horasAcum) + paddingY * 2,
-        getTextHeight(r.estado_validacion || "-", col.estado) + paddingY * 2,
+        getTextHeight(fmtNum(r.minutos_tarde), col.minTarde, {
+          align: "center",
+        }) + paddingY * 2,
       );
 
-      if (y + rowH > doc.page.height - doc.page.margins.bottom) {
+      if (y + rowH > doc.page.height - doc.page.margins.bottom - 18) {
         doc.addPage(pageConfig);
-        drawPageTitle();
-        y = doc.y;
-        drawHeader();
+        pageNumber += 1;
+        drawPageHeader(pageNumber);
+        y = 95;
+        drawTableHeader();
       }
+
+      const rowBg = index % 2 === 0 ? "#FFFFFF" : "#F9FBFD";
 
       let x = startX;
 
-      drawCell(r.fecha, x, col.fecha, y, rowH, { align: "center" });
+      drawCell(r.fecha, x, col.fecha, y, rowH, {
+        align: "center",
+        bgColor: rowBg,
+      });
       x += col.fecha;
 
-      drawCell(r.hora, x, col.hora, y, rowH, { align: "center" });
+      drawCell(r.hora, x, col.hora, y, rowH, {
+        align: "center",
+        bgColor: rowBg,
+      });
       x += col.hora;
 
-      drawCell(r.empleado, x, col.empleado, y, rowH);
+      drawCell(r.empleado, x, col.empleado, y, rowH, {
+        align: "left",
+        bgColor: rowBg,
+      });
       x += col.empleado;
 
-      drawCell(r.sede, x, col.sede, y, rowH, { align: "center" });
+      drawCell(r.sede, x, col.sede, y, rowH, {
+        align: "center",
+        bgColor: rowBg,
+      });
       x += col.sede;
 
-      drawCell(r.area, x, col.area, y, rowH, { align: "center" });
-      x += col.area;
+      drawCell(r.tipo, x, col.tipo, y, rowH, {
+        align: "center",
+        bgColor: rowBg,
+      });
+      x += col.tipo;
 
-      drawCell(r.evento, x, col.evento, y, rowH);
+      drawCell(r.evento, x, col.evento, y, rowH, {
+        align: "left",
+        bgColor: rowBg,
+      });
       x += col.evento;
 
-      drawCell(fmtNum(r.minutos_tarde), x, col.minMarca, y, rowH, {
+      drawCell(fmtNum(r.minutos_tarde), x, col.minTarde, y, rowH, {
         align: "center",
-        textColor: r.minutos_tarde > 0 ? "#C00000" : "#111",
-      });
-      x += col.minMarca;
-
-      drawCell(fmtNum(r.tardanzas_dia), x, col.tardDia, y, rowH, {
-        align: "center",
-        textColor: r.tardanzas_dia > 0 ? "#C00000" : "#111",
-      });
-      x += col.tardDia;
-
-      drawCell(fmtNum(r.minutos_acumulados), x, col.minAcum, y, rowH, {
-        align: "center",
-        textColor: r.minutos_acumulados > 0 ? "#1F4E78" : "#111",
-      });
-      x += col.minAcum;
-
-      drawCell(fmtDec(r.horas_acumuladas), x, col.horasAcum, y, rowH, {
-        align: "center",
-        textColor: r.minutos_acumulados > 0 ? "#1F4E78" : "#111",
-      });
-      x += col.horasAcum;
-
-      drawCell(r.estado_validacion || "-", x, col.estado, y, rowH, {
-        align: "center",
+        bgColor: rowBg,
+        textColor: r.minutos_tarde > 0 ? "#C00000" : "#111111",
+        bold: r.minutos_tarde > 0,
       });
 
       y += rowH;
-    }
+    });
 
     doc.end();
-  }
 
-  // ============================================
+  } 
+ // ============================================
   // Reporte maestro usuarios
   // ============================================
   @Roles("Gerencia", "RRHH")

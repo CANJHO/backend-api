@@ -7,6 +7,8 @@ import PDFDocument from "pdfkit";
 
 @Injectable()
 export class EmpleadosService {
+  private readonly DNI_EXCLUIDO = "44823948";
+
   constructor(private readonly ds: DataSource) {}
 
   // ✅ NUEVO: listar cumpleaños próximos (solo próximos, no pasados)
@@ -23,6 +25,7 @@ export class EmpleadosService {
           u.fecha_nacimiento::date AS fecha_nacimiento
         FROM usuarios u
         WHERE u.activo = TRUE
+          AND COALESCE(u.numero_documento, '') <> '${this.DNI_EXCLUIDO}'
           AND u.fecha_nacimiento IS NOT NULL
       ),
       calc AS (
@@ -104,8 +107,12 @@ export class EmpleadosService {
         LEFT JOIN sedes s  ON s.id = u.sede_id
         LEFT JOIN areas a  ON a.id = u.area_id
         WHERE
-          unaccent(lower(u.nombre || ' ' || u.apellido_paterno || ' ' || u.apellido_materno)) LIKE unaccent($1)
+          u.activo = TRUE
+          AND COALESCE(u.numero_documento, '') <> '${this.DNI_EXCLUIDO}'
+          AND (
+            unaccent(lower(u.nombre || ' ' || u.apellido_paterno || ' ' || u.apellido_materno)) LIKE unaccent($1)
           OR u.numero_documento ILIKE $1
+          )
         ORDER BY u.apellido_paterno, u.apellido_materno, u.nombre
         LIMIT $2 OFFSET $3
         `,
@@ -120,8 +127,12 @@ export class EmpleadosService {
         LEFT JOIN sedes s  ON s.id = u.sede_id
         LEFT JOIN areas a  ON a.id = u.area_id
         WHERE
-          unaccent(lower(u.nombre || ' ' || u.apellido_paterno || ' ' || u.apellido_materno)) LIKE unaccent($1)
+          u.activo = TRUE
+          AND COALESCE(u.numero_documento, '') <> '${this.DNI_EXCLUIDO}'
+          AND (
+            unaccent(lower(u.nombre || ' ' || u.apellido_paterno || ' ' || u.apellido_materno)) LIKE unaccent($1)
           OR u.numero_documento ILIKE $1
+          )
         `,
         [termino],
       );
@@ -150,6 +161,8 @@ export class EmpleadosService {
         LEFT JOIN roles r  ON r.id = u.rol_id
         LEFT JOIN sedes s  ON s.id = u.sede_id
         LEFT JOIN areas a  ON a.id = u.area_id
+        WHERE u.activo = TRUE
+          AND COALESCE(u.numero_documento, '') <> '${this.DNI_EXCLUIDO}'
         ORDER BY u.apellido_paterno, u.apellido_materno, u.nombre
         LIMIT $1 OFFSET $2
         `,
@@ -160,6 +173,8 @@ export class EmpleadosService {
         `
         SELECT COUNT(*)::int AS total
         FROM usuarios u
+        WHERE u.activo = TRUE
+          AND COALESCE(u.numero_documento, '') <> '${this.DNI_EXCLUIDO}'
         `,
       );
       total = totalRow?.[0]?.total ?? 0;
@@ -202,6 +217,8 @@ export class EmpleadosService {
       LEFT JOIN sedes s  ON s.id = u.sede_id
       LEFT JOIN areas a  ON a.id = u.area_id
       WHERE u.id = $1
+        AND u.activo = TRUE
+        AND COALESCE(u.numero_documento, '') <> '${this.DNI_EXCLUIDO}'
       LIMIT 1
       `,
       [id],
@@ -232,7 +249,9 @@ export class EmpleadosService {
        FROM usuarios u
        JOIN roles r ON r.id = u.rol_id
        JOIN sedes s ON s.id = u.sede_id
-       WHERE u.code_scannable = $1 AND u.activo = TRUE
+       WHERE u.code_scannable = $1
+         AND u.activo = TRUE
+         AND COALESCE(u.numero_documento, '') <> '${this.DNI_EXCLUIDO}'
        LIMIT 1`,
       [code],
     );
